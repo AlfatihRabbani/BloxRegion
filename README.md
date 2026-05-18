@@ -29,12 +29,6 @@ root@bloxregion:~$ help
    <continent> (asia, europe, north america, oceania, south america)
 ```
 
-## Why BloxRegion
-
-Original RoRegion-style region pickers gate every region behind a paid subscription. BloxRegion strips that. Every region — free.
-
-Plus: a full terminal UI. Typed commands. Continent aggregation. Hacker aesthetic.
-
 ## Features
 
 - **Free** — no membership, no upgrade screen, no Robux gate. Click region, join server.
@@ -108,7 +102,7 @@ Plus: a full terminal UI. Typed commands. Continent aggregation. Hacker aestheti
 | UI Designer  | Kanezama                                                               |
 | Main Coder   | [AlfatihRabbani](https://github.com/AlfatihRabbani)                    |
 
-Original feature scope inspired by the RoRegion Chrome extension — paywall code stripped, UI rewritten from scratch.
+Inspired by RoRegion Chrome extension 
 
 ## Contact
 
