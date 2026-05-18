@@ -3351,6 +3351,7 @@ async function regionSelectorInitiate() {
 							for (const s of list) if (!aggregateServers.some(x => x.id === s.id)) aggregateServers.push(s);
 						}
 						rightBody.innerHTML = '';
+						rightBody.appendChild(buildFilterBar());
 						const area = document.createElement('div');
 						area.id = 'roregion-server-list-content-area';
 						area.style.cssText = `flex: 1; overflow-y: auto; padding: 16px 20px; scrollbar-width: thin; scrollbar-color: rgba(0,255,156,0.25) transparent;`;
@@ -3608,6 +3609,63 @@ async function regionSelectorInitiate() {
 						rightBody.appendChild(container);
 					}
 
+					function buildFilterBar() {
+						const bar = document.createElement('div');
+						bar.id = 'bloxregion-filter-bar';
+						bar.style.cssText = `
+							display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 16px;
+							border-bottom: 1px solid #1a2a1f;
+							background: #0a0f0c;
+							font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+						`;
+						const label = document.createElement('span');
+						label.innerHTML = `<span style="color:#5a6a5a">sort:</span>`;
+						label.style.cssText = `font-size: 12px; align-self: center; margin-right: 4px;`;
+						bar.appendChild(label);
+						const opts = [
+							{ key: 'players_lowest',  text: 'players (lowest)' },
+							{ key: 'players_highest', text: 'players (highest)' },
+							{ key: 'ping_lowest',     text: 'ping (lowest)' },
+							{ key: 'ping_highest',    text: 'ping (highest)' }
+						];
+						const current = serverListState.currentSort;
+						opts.forEach(o => {
+							const btn = document.createElement('button');
+							btn.type = 'button';
+							btn.dataset.sortKey = o.key;
+							btn.textContent = o.text;
+							const active = current === o.key;
+							btn.style.cssText = `
+								padding: 4px 10px; border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 700;
+								background: ${active ? 'rgba(0,255,156,0.15)' : 'transparent'};
+								border: 1px solid ${active ? '#00ff9c' : '#2d6a4d'};
+								color: ${active ? '#00ff9c' : '#c8d4c8'};
+								font-family: inherit; letter-spacing: 0.04em;
+								transition: all 0.15s ease;
+							`;
+							btn.onmouseover = () => { if (serverListState.currentSort !== o.key) { btn.style.background = 'rgba(0,255,156,0.08)'; btn.style.borderColor = '#00ff9c'; } };
+							btn.onmouseout  = () => { if (serverListState.currentSort !== o.key) { btn.style.background = 'transparent'; btn.style.borderColor = '#2d6a4d'; } };
+							btn.onclick = async () => {
+								serverListState.currentSort = o.key;
+								bar.querySelectorAll('button[data-sort-key]').forEach(b => {
+									const isActive = b.dataset.sortKey === o.key;
+									b.style.background = isActive ? 'rgba(0,255,156,0.15)' : 'transparent';
+									b.style.borderColor = isActive ? '#00ff9c' : '#2d6a4d';
+									b.style.color = isActive ? '#00ff9c' : '#c8d4c8';
+								});
+								serverListState.visibleServerCount = 0;
+								serverListState.renderedServerIds = new Set();
+								serverListState.renderedServersData = new Map();
+								const list = document.getElementById('roregion-actual-server-list');
+								if (list) list.innerHTML = '';
+								await sortRobloxServers();
+								renderServerRegions();
+							};
+							bar.appendChild(btn);
+						});
+						return bar;
+					}
+
 					function showRegionServers(regionCode) {
 						const titleText = document.getElementById('roregion-right-title-text');
 						if (titleText) {
@@ -3624,9 +3682,10 @@ async function regionSelectorInitiate() {
 							titleText.appendChild(userPart);
 						}
 						rightBody.innerHTML = '';
+						rightBody.appendChild(buildFilterBar());
 						const serverListArea = document.createElement('div');
 						serverListArea.id = 'roregion-server-list-content-area';
-						serverListArea.style.cssText = `flex: 1; overflow-y: auto; padding: 16px 20px; scrollbar-width: thin; scrollbar-color: rgba(128,128,128,0.35) transparent;`;
+						serverListArea.style.cssText = `flex: 1; overflow-y: auto; padding: 16px 20px; scrollbar-width: thin; scrollbar-color: rgba(0,255,156,0.25) transparent;`;
 						const serverList = document.createElement('div');
 						serverList.id = 'roregion-actual-server-list';
 						serverList.style.cssText = `display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding-bottom: 10px;`;
@@ -4433,6 +4492,11 @@ async function regionSelectorInitiate() {
 							switch (sortValue) {
 								case 'ping_lowest':
 									return pingA - pingB || playersB - playersA;
+								case 'ping_highest': {
+									const aUnknown = pingA === Infinity, bUnknown = pingB === Infinity;
+									if (aUnknown !== bUnknown) return aUnknown ? 1 : -1;
+									return pingB - pingA || playersB - playersA;
+								}
 								case 'players_highest':
 									return (isFullA === isFullB ? 0 : isFullA ? 1 : -1) || playersB - playersA || pingA - pingB;
 								case 'players_lowest':
