@@ -1,0 +1,18 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        { "header": "user-agent", "operation": "set", "value": "Roblox/WinInet" },
+        { "header": "origin", "operation": "set", "value": "https://www.roblox.com" },
+        { "header": "referer", "operation": "set", "value": "https://www.roblox.com/" }
+      ]
+    },
+    "condition": {
+      "urlFilter": "gamejoin.roblox.com/v1/join-game-instance",
+      "resourceTypes": ["xmlhttprequest"]
+    }
+  }
+]
