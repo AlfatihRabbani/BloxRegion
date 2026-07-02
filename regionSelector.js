@@ -2234,6 +2234,7 @@ async function regionSelectorInitiate() {
 				let checkForRefreshingCount = false;
 				let rateLimited = false;
 				let nextPageCursor = null;
+				let rrServersScanned = 0;
 				let regionSpecificServers = {};
 				let isFetchingServersForRegion = {};
 				let regionSelectorShowServerListOverlay = true;
@@ -2265,6 +2266,13 @@ async function regionSelectorInitiate() {
 				};
 				const BATCH_SIZE = 8;
 				const THUMBNAIL_BATCH_SIZE = 50;
+				// --- BloxRegion speed caps ---
+				// Roblox rate-limits the per-server gamejoin lookup, so scanning every page of a
+				// popular game takes minutes. Cap the work instead of walking the whole server list.
+				// Stop after this many servers have been scanned in one load (0 = unlimited/original).
+				const RR_MAX_SERVERS_SCAN = 300;
+				// When a single region is requested, stop paging once this many of its servers are found.
+				const RR_REGION_ENOUGH = 20;
 				async function detectThemeAPI() {
 					currentTheme = document.body.classList.contains('dark-theme') ? 'dark' : 'dark';
 					return currentTheme;
@@ -2344,6 +2352,7 @@ async function regionSelectorInitiate() {
 					}
 					try {
 						if (initialCall) {
+							rrServersScanned = 0;
 							if (!specificRegion) {
 								allRobloxServers = [];
 								regionServerCounting = {};
@@ -2381,6 +2390,7 @@ async function regionSelectorInitiate() {
 											allRobloxServers = [];
 										}
 									} else {
+										rrServersScanned += servers.data.length;
 										const minP = rrFetchSettings.minPlayers ?? 0;
 										const maxP = rrFetchSettings.maxPlayers ?? null;
 										const isDesc = sortOrder === 'Desc';
@@ -2399,6 +2409,9 @@ async function regionSelectorInitiate() {
 
 										if (noPagePassedFilter && currentPageCursor) {
 											success = true;
+											if (RR_MAX_SERVERS_SCAN > 0 && rrServersScanned >= RR_MAX_SERVERS_SCAN) {
+												break;
+											}
 											await new Promise(resolve => setTimeout(resolve, 100));
 											await getServerInfo(placeId, robloxCookie, regions, false, currentPageCursor, specificRegion);
 											break;
@@ -2425,16 +2438,20 @@ async function regionSelectorInitiate() {
 											const chunk = currentBatchServers.slice(i, i + CONCURRENT_JOIN_LIMIT);
 											await Promise.all(chunk.map(async server => {
 												await handleServer(server, placeId, robloxCookie, regions, specificRegion).catch(() => null);
-												const liveContainer = document.getElementById('roregion-region-list-container');
-												if (liveContainer) await regionServersPopulate(liveContainer);
 											}));
+											// Re-render once per batch (not once per server) — the list is a full
+											// teardown + re-sort each call, so per-server rebuilds were the main UI cost.
+											const liveContainer = document.getElementById('roregion-region-list-container');
+											if (liveContainer) await regionServersPopulate(liveContainer);
 											if (i + CONCURRENT_JOIN_LIMIT < currentBatchServers.length) {
 												await new Promise(resolve => setTimeout(resolve, JOIN_BATCH_DELAY_MS));
 											}
 										}
 									}
 									success = true;
-									if (currentPageCursor) {
+									const capReached = RR_MAX_SERVERS_SCAN > 0 && rrServersScanned >= RR_MAX_SERVERS_SCAN;
+									const regionSatisfied = specificRegion && (regionServerCounting[specificRegion] || 0) >= RR_REGION_ENOUGH;
+									if (currentPageCursor && !capReached && !regionSatisfied) {
 										await new Promise(resolve => setTimeout(resolve, 100));
 										await getServerInfo(placeId, robloxCookie, regions, false, currentPageCursor, specificRegion);
 									}
@@ -3844,12 +3861,32 @@ async function regionSelectorInitiate() {
 						listContainer.innerHTML = `<div style="text-align:center; padding: 20px; color: ${isDarkMode ? '#aaa' : '#666'}">${noServersFound_Translated}</div>`;
 						return;
 					}
+					// --- Recommended: 3 regions closest to the player (BloxRegion) ---
+					const RR_RECOMMENDED_COUNT = 3;
+					const RR_RECOMMENDED_LABEL = 'RECOMMENDED';
+					if (robloxProfileUserLocation && typeof robloxProfileUserLocation.latitude === 'number' && typeof robloxProfileUserLocation.longitude === 'number') {
+						const rrRecommended = regionsData
+							.filter(r => r.count > 0 && regionCoordinates[r.code])
+							.map(r => {
+								const c = regionCoordinates[r.code];
+								return { region: r, dist: calculateDistance(robloxProfileUserLocation.latitude, robloxProfileUserLocation.longitude, c.latitude, c.longitude) };
+							})
+							.filter(x => !isNaN(x.dist))
+							.sort((a, b) => a.dist - b.dist)
+							.slice(0, RR_RECOMMENDED_COUNT)
+							.map(x => ({ ...x.region }));
+						if (rrRecommended.length > 0) {
+							groupedRegions[RR_RECOMMENDED_LABEL] = rrRecommended;
+							sortedContinents.unshift(RR_RECOMMENDED_LABEL);
+						}
+					}
 					let isFirstHeader = true;
 					sortedContinents.forEach(continent => {
 						const regionsInGroup = groupedRegions[continent];
 						if (regionsInGroup.length === 0 && continent !== unknown_Translated) return;
 						const header = document.createElement('div');
-						header.innerHTML = `<span style="color:#00ff9c">//</span> <span style="color:#5a6a5a">${continent}</span>`;
+						const rrIsRec = continent === RR_RECOMMENDED_LABEL;
+						header.innerHTML = `<span style="color:#00ff9c">//</span> <span style="color:${rrIsRec ? '#00ff9c' : '#5a6a5a'}">${rrIsRec ? '★ ' : ''}${continent}</span>`;
 						header.style.cssText = `
             padding: 10px 14px 4px 14px; font-size: 11px;
             font-weight: 700; letter-spacing: 0.1em;
