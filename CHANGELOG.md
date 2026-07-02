@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.2
+
+- Reworked terminal and list rendering to build DOM nodes directly instead of
+  assigning dynamic HTML strings, clearing all 12 AMO validator warnings
+  ("Unsafe assignment to innerHTML").
+
 ## 1.1.1
 
 - Minor internal fixes.

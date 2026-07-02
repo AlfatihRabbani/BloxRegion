@@ -3061,7 +3061,9 @@ async function regionSelectorInitiate() {
 							ourPlayBtn.type = 'button';
 
 							const iconSize = Math.round(fullHeight * 0.48);
-							ourPlayBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="${iconSize}" height="${iconSize}"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`;
+							ourPlayBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>';
+							const ourPlaySvg = ourPlayBtn.querySelector('svg');
+							if (ourPlaySvg) { ourPlaySvg.setAttribute('width', iconSize); ourPlaySvg.setAttribute('height', iconSize); }
 							ourPlayBtn.style.cssText = `
 								width: ${ourSliceWidth}px;
 								height: ${fullHeight}px;
@@ -3364,7 +3366,9 @@ async function regionSelectorInitiate() {
 					function showContinentServers(continentName) {
 						const titleText = document.getElementById('roregion-right-title-text');
 						if (titleText) {
-							titleText.innerHTML = `<span style="color:#5a6a5a">root@</span><span style="color:#00ff9c">bloxregion</span><span style="color:#5a6a5a">:~/</span><span style="color:#4a7bf7">${continentName.toLowerCase().replace(/\s+/g,'_')}</span>`;
+							titleText.textContent = '';
+							const rrTtSegs = [['#5a6a5a', 'root@'], ['#00ff9c', 'bloxregion'], ['#5a6a5a', ':~/'], ['#4a7bf7', continentName.toLowerCase().replace(/\s+/g, '_')]];
+							for (const rrSeg of rrTtSegs) { const sp = document.createElement('span'); sp.style.color = rrSeg[0]; sp.textContent = rrSeg[1]; titleText.appendChild(sp); }
 						}
 						const matchingCodes = Array.from(new Set([...defaultRegions, ...Object.keys(regionServerCounting)]))
 							.filter(c => c !== '??' && getRegionContinentInfo(c, regionCoordinates) === continentName);
@@ -3384,7 +3388,10 @@ async function regionSelectorInitiate() {
 						area.appendChild(grid);
 						rightBody.appendChild(area);
 						if (aggregateServers.length === 0) {
-							grid.innerHTML = `<p style="grid-column:1/-1;text-align:center;padding:40px 0;color:#5a6a5a;font-family:'JetBrains Mono',monospace">// no servers indexed in ${continentName}</p>`;
+							const rrNoSrv = document.createElement('p');
+							rrNoSrv.style.cssText = "grid-column:1/-1;text-align:center;padding:40px 0;color:#5a6a5a;font-family:'JetBrains Mono',monospace";
+							rrNoSrv.textContent = '// no servers indexed in ' + continentName;
+							grid.appendChild(rrNoSrv);
 							return;
 						}
 						serverListState = {
@@ -3459,7 +3466,11 @@ async function regionSelectorInitiate() {
 							prefix.textContent = l.p;
 							const text = document.createElement('span');
 							text.style.cssText = `${l.bold ? 'font-weight: 700;' : ''}`;
-							text.innerHTML = l.text.replace(/\[OK\]/g, '<span style="color:#00ff9c;font-weight:700">[OK]</span>');
+							const rrOkParts = String(l.text).split('[OK]');
+							rrOkParts.forEach((rrPart, rrIdx) => {
+								if (rrIdx > 0) { const ok = document.createElement('span'); ok.style.cssText = 'color:#00ff9c;font-weight:700'; ok.textContent = '[OK]'; text.appendChild(ok); }
+								if (rrPart) text.appendChild(document.createTextNode(rrPart));
+							});
 							row.append(prefix, text);
 							term.appendChild(row);
 						});
@@ -3532,7 +3543,8 @@ async function regionSelectorInitiate() {
 						function appendHistory(html) {
 							const row = document.createElement('div');
 							row.style.cssText = `display: flex; gap: 8px; align-items: flex-start;`;
-							row.innerHTML = html;
+							const rrDoc = new DOMParser().parseFromString(html, 'text/html');
+							while (rrDoc.body.firstChild) row.appendChild(rrDoc.body.firstChild);
 							historyBox.appendChild(row);
 							term.scrollTop = term.scrollHeight;
 						}
@@ -3701,7 +3713,8 @@ async function regionSelectorInitiate() {
 								titleText.appendChild(img);
 							}
 							const userPart = document.createElement('span');
-							userPart.innerHTML = `<span style="color:#5a6a5a">root@</span><span style="color:#00ff9c">bloxregion</span><span style="color:#5a6a5a">:~/</span><span style="color:#4a7bf7">${(regionCode || '').toLowerCase()}</span>`;
+							const rrUpSegs = [['#5a6a5a', 'root@'], ['#00ff9c', 'bloxregion'], ['#5a6a5a', ':~/'], ['#4a7bf7', (regionCode || '').toLowerCase()]];
+							for (const rrSeg of rrUpSegs) { const sp = document.createElement('span'); sp.style.color = rrSeg[0]; sp.textContent = rrSeg[1]; userPart.appendChild(sp); }
 							titleText.appendChild(userPart);
 						}
 						rightBody.innerHTML = '';
@@ -3718,7 +3731,12 @@ async function regionSelectorInitiate() {
 
 						let serversInRegion = regionSpecificServers[regionCode] || allRobloxServers.filter(s => robloxServerPlaces[s.id]?.c === regionCode);
 						if (serversInRegion.length === 0) {
-							serverList.innerHTML = `<p style="text-align:center;padding:40px 0;font-weight:bold;color:${isDarkMode?'#aaa':'#666'}">${noServersRegion_Translated}</p>`;
+							serverList.textContent = '';
+							const rrEmptyP = document.createElement('p');
+							rrEmptyP.style.cssText = 'text-align:center;padding:40px 0;font-weight:bold;';
+							rrEmptyP.style.color = isDarkMode ? '#aaa' : '#666';
+							rrEmptyP.textContent = noServersRegion_Translated;
+							serverList.appendChild(rrEmptyP);
 						} else {
 							serverListState = {
 								...serverListState,
@@ -3814,7 +3832,11 @@ async function regionSelectorInitiate() {
 					const isDarkMode = currentTheme === 'dark';
 					listContainer.innerHTML = '';
 					if (checkForRefreshingCount && allRobloxServers.length === 0) {
-						listContainer.innerHTML = `<div style="text-align:center; padding: 20px; color: ${isDarkMode ? '#aaa' : '#666'}">${loadingRegions_Translated}</div>`;
+						const rrLoadingDiv = document.createElement('div');
+						rrLoadingDiv.style.cssText = 'text-align:center; padding: 20px;';
+						rrLoadingDiv.style.color = isDarkMode ? '#aaa' : '#666';
+						rrLoadingDiv.textContent = loadingRegions_Translated;
+						listContainer.appendChild(rrLoadingDiv);
 						return;
 					}
 					const foundRegionCodes = Object.keys(regionServerCounting).filter(rc => rc !== "??");
@@ -3890,7 +3912,11 @@ async function regionSelectorInitiate() {
 					}
 					let totalServersFound = regionsData.reduce((sum, region) => sum + region.count, 0) + unknownServerCount;
 					if (sortedContinents.length === 0 && unknownServerCount === 0 && !checkForRefreshingCount) {
-						listContainer.innerHTML = `<div style="text-align:center; padding: 20px; color: ${isDarkMode ? '#aaa' : '#666'}">${noServersFound_Translated}</div>`;
+						const rrNoneDiv = document.createElement('div');
+						rrNoneDiv.style.cssText = 'text-align:center; padding: 20px;';
+						rrNoneDiv.style.color = isDarkMode ? '#aaa' : '#666';
+						rrNoneDiv.textContent = noServersFound_Translated;
+						listContainer.appendChild(rrNoneDiv);
 						return;
 					}
 					// --- Recommended: 3 regions closest to the player (BloxRegion) ---
@@ -3918,7 +3944,13 @@ async function regionSelectorInitiate() {
 						if (regionsInGroup.length === 0 && continent !== unknown_Translated) return;
 						const header = document.createElement('div');
 						const rrIsRec = continent === RR_RECOMMENDED_LABEL;
-						header.innerHTML = `<span style="color:#00ff9c">//</span> <span style="color:${rrIsRec ? '#00ff9c' : '#5a6a5a'}">${rrIsRec ? '★ ' : ''}${continent}</span>`;
+						const rrHdrSlash = document.createElement('span');
+						rrHdrSlash.style.color = '#00ff9c';
+						rrHdrSlash.textContent = '//';
+						const rrHdrName = document.createElement('span');
+						rrHdrName.style.color = rrIsRec ? '#00ff9c' : '#5a6a5a';
+						rrHdrName.textContent = (rrIsRec ? '\u2605 ' : '') + continent;
+						header.append(rrHdrSlash, ' ', rrHdrName);
 						header.style.cssText = `
             padding: 10px 14px 4px 14px; font-size: 11px;
             font-weight: 700; letter-spacing: 0.1em;
@@ -4107,7 +4139,12 @@ async function regionSelectorInitiate() {
 					serverListState.renderedServerIds.clear();
 					serverListState.loading = false;
 					if (serverListState.servers.length === 0) {
-						listElement.innerHTML = `<p style="text-align:center; padding: 40px 0; font-weight:bold; color:${isDarkMode ? '#aaa' : '#666'}">${noActiveServers_Translated}</p>`;
+						listElement.textContent = '';
+						const rrNoActive = document.createElement('p');
+						rrNoActive.style.cssText = 'text-align:center; padding: 40px 0; font-weight:bold;';
+						rrNoActive.style.color = isDarkMode ? '#aaa' : '#666';
+						rrNoActive.textContent = noActiveServers_Translated;
+						listElement.appendChild(rrNoActive);
 						return;
 					}
 					const loadingPlaceholder = document.createElement('div');
@@ -4474,7 +4511,14 @@ async function regionSelectorInitiate() {
 						else pingColor = '#ff5f57';
 					}
 					const pingText = document.createElement('span');
-					pingText.innerHTML = `<span style="color:#5a6a5a">ping:</span> <span style="color:${pingColor};font-weight:700">${pingDisplay}</span>`;
+					const rrPingLbl = document.createElement('span');
+					rrPingLbl.style.color = '#5a6a5a';
+					rrPingLbl.textContent = 'ping:';
+					const rrPingVal = document.createElement('span');
+					rrPingVal.style.color = pingColor;
+					rrPingVal.style.fontWeight = '700';
+					rrPingVal.textContent = pingDisplay;
+					pingText.append(rrPingLbl, ' ', rrPingVal);
 					pingText.style.fontFamily = 'inherit';
 					pingText.style.fontSize = '12px';
 					pingContainer.appendChild(pingText);
