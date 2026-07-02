@@ -56,7 +56,8 @@
       "resources": [
         "regionSelector.js",
         "json/countries.json",
-        "icons/*.png"
+        "icons/*.png",
+        "idk/*.mp3"
       ],
       "matches": ["*://*.roblox.com/*"]
     }

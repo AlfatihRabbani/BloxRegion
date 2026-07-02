@@ -2235,6 +2235,9 @@ async function regionSelectorInitiate() {
 				let rateLimited = false;
 				let nextPageCursor = null;
 				let rrServersScanned = 0;
+				let rrEggPlayed = false;
+				let rrEggLastCounts = {};
+				let rrEggAttempted = {};
 				let regionSpecificServers = {};
 				let isFetchingServersForRegion = {};
 				let regionSelectorShowServerListOverlay = true;
@@ -2359,6 +2362,9 @@ async function regionSelectorInitiate() {
 								robloxServerPlaces = {};
 								regionSpecificServers = {};
 								nextPageCursor = null;
+								rrEggPlayed = false;
+								rrEggLastCounts = {};
+								rrEggAttempted = {};
 							} else {
 								regionSpecificServers[specificRegion] = [];
 								regionServerCounting[specificRegion] = 0;
@@ -3778,6 +3784,31 @@ async function regionSelectorInitiate() {
 							return unknown_Translated;
 					}
 				}
+				const RR_EGG_SOUNDS = { 67: 'idk/67.mp3', 770: 'idk/770.mp3' };
+				const RR_EGG_CHANCE = 0.01;
+				function rrCheckCountEasterEgg(regionsData) {
+					for (const r of regionsData) {
+						const prev = rrEggLastCounts[r.code] || 0;
+						const now = r.count || 0;
+						if (now !== prev) rrEggLastCounts[r.code] = now;
+						if (rrEggPlayed) continue;
+						for (const threshold of [67, 770]) {
+							if (prev < threshold && now >= threshold) {
+								const key = r.code + ':' + threshold;
+								if (rrEggAttempted[key]) continue;
+								rrEggAttempted[key] = true;
+								if (Math.random() < RR_EGG_CHANCE) {
+									rrEggPlayed = true;
+									try {
+										const eggAudio = new Audio(chrome.runtime.getURL(RR_EGG_SOUNDS[threshold]));
+										eggAudio.play().catch(() => {});
+									} catch (e) {}
+									return;
+								}
+							}
+						}
+					}
+				}
 				async function regionServersPopulate(listContainer) {
 					if (!listContainer) return;
 					const isDarkMode = currentTheme === 'dark';
@@ -3795,6 +3826,7 @@ async function regionSelectorInitiate() {
 						count: regionServerCounting[code] || 0,
 						continent: getRegionContinentInfo(code, regionCoordinates)
 					}));
+					try { rrCheckCountEasterEgg(regionsData); } catch (e) {}
 					const groupedRegions = regionsData.reduce((acc, region) => {
 						const continent = region.continent;
 						if (!acc[continent]) {
