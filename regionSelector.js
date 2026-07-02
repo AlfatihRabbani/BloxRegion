@@ -2273,7 +2273,7 @@ async function regionSelectorInitiate() {
 				// Roblox rate-limits the per-server gamejoin lookup, so scanning every page of a
 				// popular game takes minutes. Cap the work instead of walking the whole server list.
 				// Stop after this many servers have been scanned in one load (0 = unlimited/original).
-				const RR_MAX_SERVERS_SCAN = 300;
+				const RR_MAX_SERVERS_SCAN = 800;
 				// When a single region is requested, stop paging once this many of its servers are found.
 				const RR_REGION_ENOUGH = 20;
 				async function detectThemeAPI() {

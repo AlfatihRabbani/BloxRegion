@@ -3,6 +3,8 @@
 ## 1.1.1
 
 - Minor internal fixes.
+- Raised the server scan cap from 300 to 800 (`RR_MAX_SERVERS_SCAN`) so larger
+  games index more servers per load.
 
 ## 1.1.0
 
