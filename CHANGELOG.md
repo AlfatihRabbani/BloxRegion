@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.1
+
+- Minor internal fixes.
+
 ## 1.1.0
 
 **Faster region loading.**
