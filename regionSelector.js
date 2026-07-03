@@ -3449,12 +3449,14 @@ async function regionSelectorInitiate() {
 
 						const total = allRobloxServers.length;
 						const regionsCount = Object.keys(regionServerCounting || {}).filter(k => k !== '??').length;
+						let rrCoreVer = '?';
+						try { rrCoreVer = chrome.runtime.getManifest().version; } catch (e) {}
 						const bootLines = [
-							{ p: '>>', text: 'Initializing BloxRegion Core v1.0...' },
+							{ p: '>>', text: 'Initializing BloxRegion Core v' + rrCoreVer + '...' },
 							{ p: '>>', text: 'Loading region mapping modules... [OK]' },
 							{ p: '>>', text: 'Spoofing client headers via dNR... [OK]' },
 							{ p: '>>', text: 'Resolving datacenter geolocation... [OK]' },
-							{ p: '>>', text: `Indexed ${total} servers across ${regionsCount} regions.` },
+							{ p: '>>', text: `Indexed ${total} servers across ${regionsCount} regions.`, statsLine: true },
 							{ p: '>>', text: 'Type a region or continent to view its servers.', bold: true },
 						];
 
@@ -3467,6 +3469,7 @@ async function regionSelectorInitiate() {
 							prefix.textContent = l.p;
 							const text = document.createElement('span');
 							text.style.cssText = `${l.bold ? 'font-weight: 700;' : ''}`;
+							if (l.statsLine) text.id = 'bloxregion-indexed-stats';
 							const rrOkParts = String(l.text).split('[OK]');
 							rrOkParts.forEach((rrPart, rrIdx) => {
 								if (rrIdx > 0) { const ok = document.createElement('span'); ok.style.cssText = 'color:#00ff9c;font-weight:700'; ok.textContent = '[OK]'; text.appendChild(ok); }
@@ -3541,13 +3544,39 @@ async function regionSelectorInitiate() {
 
 						setTimeout(() => input.focus(), bootLines.length * 70 + 80);
 
+						// Command output types out like a real terminal. 80 wpm = 5-char words = 150ms/char;
+						// long outputs are compressed to fit RR_TYPE_MAX_MS so `list` stays usable.
+						const RR_TYPE_WPM = 80;
+						const RR_TYPE_MAX_MS = 4000;
+						let rrTypeQueue = Promise.resolve();
 						function appendHistory(html) {
 							const row = document.createElement('div');
 							row.style.cssText = `display: flex; gap: 8px; align-items: flex-start;`;
 							const rrDoc = new DOMParser().parseFromString(html, 'text/html');
 							while (rrDoc.body.firstChild) row.appendChild(rrDoc.body.firstChild);
 							historyBox.appendChild(row);
-							term.scrollTop = term.scrollHeight;
+							const rrTexts = [];
+							(function rrCollect(node) {
+								for (const child of Array.from(node.childNodes)) {
+									if (child.nodeType === 3) rrTexts.push([child, child.nodeValue]);
+									else rrCollect(child);
+								}
+							})(row);
+							const totalChars = rrTexts.reduce((n, t) => n + t[1].length, 0);
+							if (totalChars === 0) { term.scrollTop = term.scrollHeight; return; }
+							for (const t of rrTexts) t[0].nodeValue = '';
+							let rrDelay = Math.round(60000 / (RR_TYPE_WPM * 5));
+							if (rrDelay * totalChars > RR_TYPE_MAX_MS) rrDelay = Math.max(4, Math.floor(RR_TYPE_MAX_MS / totalChars));
+							rrTypeQueue = rrTypeQueue.then(() => new Promise(resolve => {
+								let ti = 0, ci = 0;
+								const timer = setInterval(() => {
+									if (ti >= rrTexts.length) { clearInterval(timer); resolve(); return; }
+									const rrPair = rrTexts[ti];
+									rrPair[0].nodeValue = rrPair[1].slice(0, ++ci);
+									if (ci >= rrPair[1].length) { ti++; ci = 0; }
+									term.scrollTop = term.scrollHeight;
+								}, rrDelay);
+							}));
 						}
 
 						function runCommand(rawInput) {
@@ -3809,6 +3838,13 @@ async function regionSelectorInitiate() {
 							return unknown_Translated;
 					}
 				}
+				function rrUpdateIndexedStats() {
+					const el = document.getElementById('bloxregion-indexed-stats');
+					if (!el) return;
+					const total = allRobloxServers.length;
+					const regionsCount = Object.keys(regionServerCounting || {}).filter(k => k !== '??' && k !== '???' && (regionServerCounting[k] || 0) > 0).length;
+					el.textContent = `Indexed ${total} servers across ${regionsCount} regions.`;
+				}
 				const RR_EGG_SOUNDS = { 67: 'idk/67.mp3', 770: 'idk/770.mp3' };
 				const RR_EGG_CHANCE = 0.01;
 				function rrCheckCountEasterEgg(regionsData) {
@@ -3835,6 +3871,7 @@ async function regionSelectorInitiate() {
 					}
 				}
 				async function regionServersPopulate(listContainer) {
+					rrUpdateIndexedStats();
 					if (!listContainer) return;
 					const isDarkMode = currentTheme === 'dark';
 					listContainer.innerHTML = '';
