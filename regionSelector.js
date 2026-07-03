@@ -3544,17 +3544,19 @@ async function regionSelectorInitiate() {
 
 						setTimeout(() => input.focus(), bootLines.length * 70 + 80);
 
-						// Command output types out like a real terminal. 180 wpm = 5-char words = ~67ms/char;
-						// long outputs are compressed to fit RR_TYPE_MAX_MS so `list` stays usable.
-						const RR_TYPE_WPM = 180;
+						// Command output types out like a real terminal (250 wpm = 5-char words = 48ms/char);
+						// the command echo renders instantly — only output animates. Long outputs are
+						// compressed to fit RR_TYPE_MAX_MS so `list` stays usable.
+						const RR_TYPE_WPM = 250;
 						const RR_TYPE_MAX_MS = 4000;
 						let rrTypeQueue = Promise.resolve();
-						function appendHistory(html) {
+						function appendHistory(html, instant) {
 							const row = document.createElement('div');
 							row.style.cssText = `display: flex; gap: 8px; align-items: flex-start;`;
 							const rrDoc = new DOMParser().parseFromString(html, 'text/html');
 							while (rrDoc.body.firstChild) row.appendChild(rrDoc.body.firstChild);
 							historyBox.appendChild(row);
+							if (instant) { term.scrollTop = term.scrollHeight; return; }
 							const rrTexts = [];
 							(function rrCollect(node) {
 								for (const child of Array.from(node.childNodes)) {
@@ -3581,7 +3583,7 @@ async function regionSelectorInitiate() {
 
 						function runCommand(rawInput) {
 							const safe = String(rawInput).replace(/[<>&]/g, ch => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[ch]));
-							appendHistory(`<span style="color:#00ff9c;font-weight:700;flex-shrink:0">root@bloxregion</span><span style="color:#5a6a5a">:</span><span style="color:#4a7bf7">~</span><span style="color:#5a6a5a">$</span><span style="color:#c8d4c8">${safe}</span>`);
+							appendHistory(`<span style="color:#00ff9c;font-weight:700;flex-shrink:0">root@bloxregion</span><span style="color:#5a6a5a">:</span><span style="color:#4a7bf7">~</span><span style="color:#5a6a5a">$</span><span style="color:#c8d4c8">${safe}</span>`, true);
 							const cmd = resolveCommand(rawInput);
 							if (!cmd) return;
 							if (cmd.kind === 'help') {
