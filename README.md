@@ -24,7 +24,7 @@
 
 ```bash
 root@bloxregion:~$ help
->> commands: help, list, home, refresh, credits, contacts, exit,
+>> commands: help, list, home, refresh, credits, contacts, version, exit,
    <country> (singapore, brazil, ...),
    <continent> (asia, europe, north america, oceania, south america)
 ```
@@ -48,6 +48,7 @@ root@bloxregion:~$ help
 | `refresh` / `reload` | Re-fetch server list |
 | `credits` | Show credits |
 | `contacts` | Show contact links |
+| `version` / `ver` | Show installed version |
 | `exit` / `quit` | Close the panel |
 | `<country>` | e.g. `singapore`, `germany`, `brazil` — open that region |
 | `<region code>` | e.g. `SG`, `US-CA`, `DE` — open that region |

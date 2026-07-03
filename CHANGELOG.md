@@ -14,6 +14,8 @@
   nearest first, instead of the three nearest regions that happened to load
   first — no more far-away regions appearing there during loading. Counts
   fill in live.
+- New `version` terminal command (aliases: `ver`, `-v`) prints the installed
+  extension version, read live from the manifest.
 
 ## 1.1.3
 

@@ -3332,6 +3332,7 @@ async function regionSelectorInitiate() {
 						if (t === 'credits') return { kind: 'credits' };
 						if (t === 'contacts' || t === 'contact') return { kind: 'contacts' };
 						if (t === 'exit' || t === 'quit') return { kind: 'exit' };
+						if (t === 'version' || t === 'ver' || t === '-v' || t === '--version') return { kind: 'version' };
 						const continents = {
 							'asia': 'Asia', 'europe': 'Europe', 'north america': 'North America',
 							'south america': 'South America', 'oceania': 'Oceania', 'africa': 'Africa',
@@ -3555,7 +3556,7 @@ async function regionSelectorInitiate() {
 							const cmd = resolveCommand(rawInput);
 							if (!cmd) return;
 							if (cmd.kind === 'help') {
-								appendHistory(`<span style="color:#00ff9c">&gt;&gt;</span><span style="color:#c8d4c8">commands: <span style="color:#00ff9c">help</span>, <span style="color:#00ff9c">list</span>, <span style="color:#00ff9c">home</span>, <span style="color:#00ff9c">refresh</span>, <span style="color:#00ff9c">credits</span>, <span style="color:#00ff9c">contacts</span>, <span style="color:#00ff9c">exit</span>, &lt;country&gt; (singapore, brazil, ...), &lt;continent&gt; (asia, europe, north america, oceania, south america)</span>`);
+								appendHistory(`<span style="color:#00ff9c">&gt;&gt;</span><span style="color:#c8d4c8">commands: <span style="color:#00ff9c">help</span>, <span style="color:#00ff9c">list</span>, <span style="color:#00ff9c">home</span>, <span style="color:#00ff9c">refresh</span>, <span style="color:#00ff9c">credits</span>, <span style="color:#00ff9c">contacts</span>, <span style="color:#00ff9c">version</span>, <span style="color:#00ff9c">exit</span>, &lt;country&gt; (singapore, brazil, ...), &lt;continent&gt; (asia, europe, north america, oceania, south america)</span>`);
 								return;
 							}
 							if (cmd.kind === 'credits') {
@@ -3568,6 +3569,12 @@ async function regionSelectorInitiate() {
 								appendHistory(`<span style="color:#00ff9c">&gt;&gt;</span><span style="color:#c8d4c8">contacts — AlfatihRabbani:</span>`);
 								appendHistory(`<span style="color:#00ff9c">&nbsp;&nbsp;-</span><span style="color:#c8d4c8"><span style="color:#5a6a5a">github:&nbsp;&nbsp;</span><a href="https://github.com/AlfatihRabbani" target="_blank" rel="noopener" style="color:#00ff9c;text-decoration:underline;cursor:pointer">https://github.com/AlfatihRabbani</a></span>`);
 								appendHistory(`<span style="color:#00ff9c">&nbsp;&nbsp;-</span><span style="color:#c8d4c8"><span style="color:#5a6a5a">linkedin:</span> <a href="https://www.linkedin.com/in/fatih-rabbani-50a39037b/" target="_blank" rel="noopener" style="color:#4a7bf7;text-decoration:underline;cursor:pointer">https://www.linkedin.com/in/fatih-rabbani-50a39037b/</a></span>`);
+								return;
+							}
+							if (cmd.kind === 'version') {
+								let rrVer = 'unknown';
+								try { rrVer = chrome.runtime.getManifest().version; } catch (e) {}
+								appendHistory(`<span style="color:#00ff9c">&gt;&gt;</span><span style="color:#c8d4c8">BloxRegion <span style="color:#00ff9c">v${rrVer}</span> — free and open source</span>`);
 								return;
 							}
 							if (cmd.kind === 'exit') {
