@@ -4,9 +4,9 @@
 
 - The boot screen's "Indexed N servers across M regions" line now updates
   live as servers resolve, instead of only refreshing when you reopen home.
-- Terminal command output now types out like a real terminal at 80 words per
-  minute (`RR_TYPE_WPM`), with a per-line time cap (`RR_TYPE_MAX_MS`) so long
-  outputs like `list` stay fast.
+- Terminal command output now types out like a real terminal at 180 words
+  per minute (`RR_TYPE_WPM`), with a per-line time cap (`RR_TYPE_MAX_MS`) so
+  long outputs like `list` stay fast.
 - The boot banner now shows the real installed version (was hardcoded
   "v1.0").
 

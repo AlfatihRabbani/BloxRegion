@@ -3544,9 +3544,9 @@ async function regionSelectorInitiate() {
 
 						setTimeout(() => input.focus(), bootLines.length * 70 + 80);
 
-						// Command output types out like a real terminal. 80 wpm = 5-char words = 150ms/char;
+						// Command output types out like a real terminal. 180 wpm = 5-char words = ~67ms/char;
 						// long outputs are compressed to fit RR_TYPE_MAX_MS so `list` stays usable.
-						const RR_TYPE_WPM = 80;
+						const RR_TYPE_WPM = 180;
 						const RR_TYPE_MAX_MS = 4000;
 						let rrTypeQueue = Promise.resolve();
 						function appendHistory(html) {
