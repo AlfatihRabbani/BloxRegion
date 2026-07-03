@@ -2272,10 +2272,11 @@ async function regionSelectorInitiate() {
 				// --- BloxRegion speed caps ---
 				// Roblox rate-limits the per-server gamejoin lookup, so scanning every page of a
 				// popular game takes minutes. Cap the work instead of walking the whole server list.
-				// Stop after this many servers have been scanned in one load (0 = unlimited/original).
+				// Stop after this many servers have passed the player filters and been resolved in one
+				// load; fully-filtered pages are cheap and do not count (0 = unlimited/original).
 				const RR_MAX_SERVERS_SCAN = 800;
 				// When a single region is requested, stop paging once this many of its servers are found.
-				const RR_REGION_ENOUGH = 20;
+				const RR_REGION_ENOUGH = 100;
 				async function detectThemeAPI() {
 					currentTheme = document.body.classList.contains('dark-theme') ? 'dark' : 'dark';
 					return currentTheme;
@@ -2396,7 +2397,6 @@ async function regionSelectorInitiate() {
 											allRobloxServers = [];
 										}
 									} else {
-										rrServersScanned += servers.data.length;
 										const minP = rrFetchSettings.minPlayers ?? 0;
 										const maxP = rrFetchSettings.maxPlayers ?? null;
 										const isDesc = sortOrder === 'Desc';
@@ -2410,6 +2410,7 @@ async function regionSelectorInitiate() {
 											return true;
 										});
 
+										rrServersScanned += filteredBatch.length;
 										const allPagePassedFilter = filteredBatch.length === servers.data.length;
 										const noPagePassedFilter = filteredBatch.length === 0;
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.3
+
+- Fixed region counts collapsing to a handful of servers (e.g. Singapore
+  showing 6 instead of 1000+). The scan cap was counting every *listed*
+  server, but Roblox lists near-empty servers first and those are filtered
+  out before region resolution — so the whole budget was spent on servers
+  that never got counted. The cap now only counts servers that pass the
+  player filters and actually get resolved.
+- Raised the single-region fetch target from 20 to 100 servers
+  (`RR_REGION_ENOUGH`) so opening a region shows a proper list.
+
 ## 1.1.2
 
 - Reworked terminal and list rendering to build DOM nodes directly instead of
