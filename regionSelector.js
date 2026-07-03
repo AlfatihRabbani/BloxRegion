@@ -2271,12 +2271,11 @@ async function regionSelectorInitiate() {
 				const THUMBNAIL_BATCH_SIZE = 50;
 				// --- BloxRegion speed caps ---
 				// Roblox rate-limits the per-server gamejoin lookup, so scanning every page of a
-				// popular game takes minutes. Cap the work instead of walking the whole server list.
-				// Stop after this many servers have passed the player filters and been resolved in one
-				// load; fully-filtered pages are cheap and do not count (0 = unlimited/original).
-				const RR_MAX_SERVERS_SCAN = 800;
+				// popular game takes minutes — but capping it starves region counts. Both caps below
+				// default to 0 (unlimited, full counts); set e.g. 800 for faster but partial loads.
+				const RR_MAX_SERVERS_SCAN = 0;
 				// When a single region is requested, stop paging once this many of its servers are found.
-				const RR_REGION_ENOUGH = 100;
+				const RR_REGION_ENOUGH = 0;
 				async function detectThemeAPI() {
 					currentTheme = document.body.classList.contains('dark-theme') ? 'dark' : 'dark';
 					return currentTheme;
@@ -2457,7 +2456,7 @@ async function regionSelectorInitiate() {
 									}
 									success = true;
 									const capReached = RR_MAX_SERVERS_SCAN > 0 && rrServersScanned >= RR_MAX_SERVERS_SCAN;
-									const regionSatisfied = specificRegion && (regionServerCounting[specificRegion] || 0) >= RR_REGION_ENOUGH;
+									const regionSatisfied = RR_REGION_ENOUGH > 0 && specificRegion && (regionServerCounting[specificRegion] || 0) >= RR_REGION_ENOUGH;
 									if (currentPageCursor && !capReached && !regionSatisfied) {
 										await new Promise(resolve => setTimeout(resolve, 100));
 										await getServerInfo(placeId, robloxCookie, regions, false, currentPageCursor, specificRegion);
@@ -3925,7 +3924,7 @@ async function regionSelectorInitiate() {
 					const RR_RECOMMENDED_LABEL = 'RECOMMENDED';
 					if (robloxProfileUserLocation && typeof robloxProfileUserLocation.latitude === 'number' && typeof robloxProfileUserLocation.longitude === 'number') {
 						const rrRecommended = regionsData
-							.filter(r => r.count > 0 && regionCoordinates[r.code])
+							.filter(r => regionCoordinates[r.code])
 							.map(r => {
 								const c = regionCoordinates[r.code];
 								return { region: r, dist: calculateDistance(robloxProfileUserLocation.latitude, robloxProfileUserLocation.longitude, c.latitude, c.longitude) };

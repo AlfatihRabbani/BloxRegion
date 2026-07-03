@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.1.4
+
+- Region scanning is unlimited by default again. The scan cap introduced in
+  1.1.1 traded away too many servers on large games — regions that should
+  show 1000+ servers showed single digits, because rate-limited lookups
+  consumed the budget. Full counts are back, at the cost of the original
+  longer load time. The fast partial mode is still available by setting
+  `RR_MAX_SERVERS_SCAN` (e.g. 800) in `regionSelector.js`.
+- Opening a single region no longer stops early by default
+  (`RR_REGION_ENOUGH = 0`).
+- The ★ RECOMMENDED list now always shows the three regions nearest to you,
+  nearest first, instead of the three nearest regions that happened to load
+  first — no more far-away regions appearing there during loading. Counts
+  fill in live.
+
 ## 1.1.3
 
 - Fixed region counts collapsing to a handful of servers (e.g. Singapore
