@@ -1,6 +1,9 @@
 # Changelog
 
-## 1.1.4
+## 1.1.5
+
+(1.1.4 was consumed by an AMO upload and could not be reused; identical
+content shipped as 1.1.5.)
 
 - Region scanning is unlimited by default again. The scan cap introduced in
   1.1.1 traded away too many servers on large games — regions that should
