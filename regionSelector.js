@@ -3279,7 +3279,8 @@ async function regionSelectorInitiate() {
 					`;
 					const titleText = document.createElement('span');
 					titleText.id = 'roregion-right-title-text';
-					titleText.innerHTML = `<span style="color:#5a6a5a">root@</span><span style="color:#00ff9c">bloxregion</span><span style="color:#5a6a5a">:~</span>`;
+					titleText.innerHTML = `<span style="color:#5a6a5a"><span class="bloxregion-user">root</span>@</span><span style="color:#00ff9c">bloxregion</span><span style="color:#5a6a5a">:~</span>`;
+					rrApplyUsername();
 					rightTitleEl.append(trafficDots, titleText);
 
 					const closeBtn = document.createElement('button');
@@ -3371,8 +3372,11 @@ async function regionSelectorInitiate() {
 						const titleText = document.getElementById('roregion-right-title-text');
 						if (titleText) {
 							titleText.textContent = '';
-							const rrTtSegs = [['#5a6a5a', 'root@'], ['#00ff9c', 'bloxregion'], ['#5a6a5a', ':~/'], ['#4a7bf7', continentName.toLowerCase().replace(/\s+/g, '_')]];
+							const rrTtUser = document.createElement('span'); rrTtUser.style.color = '#5a6a5a'; rrTtUser.className = 'bloxregion-user'; rrTtUser.textContent = rrRobloxUsername; titleText.appendChild(rrTtUser);
+							const rrTtAt = document.createElement('span'); rrTtAt.style.color = '#5a6a5a'; rrTtAt.textContent = '@'; titleText.appendChild(rrTtAt);
+							const rrTtSegs = [['#00ff9c', 'bloxregion'], ['#5a6a5a', ':~/'], ['#4a7bf7', continentName.toLowerCase().replace(/\s+/g, '_')]];
 							for (const rrSeg of rrTtSegs) { const sp = document.createElement('span'); sp.style.color = rrSeg[0]; sp.textContent = rrSeg[1]; titleText.appendChild(sp); }
+							rrApplyUsername();
 						}
 						const matchingCodes = Array.from(new Set([...defaultRegions, ...Object.keys(regionServerCounting)]))
 							.filter(c => c !== '??' && getRegionContinentInfo(c, regionCoordinates) === continentName);
@@ -3416,7 +3420,7 @@ async function regionSelectorInitiate() {
 
 					async function showDefaultRightPanel() {
 						const titleText = document.getElementById('roregion-right-title-text');
-						if (titleText) titleText.innerHTML = `<span style="color:#5a6a5a">root@</span><span style="color:#00ff9c">bloxregion</span><span style="color:#5a6a5a">:~</span>`;
+						if (titleText) { titleText.innerHTML = `<span style="color:#5a6a5a"><span class="bloxregion-user">root</span>@</span><span style="color:#00ff9c">bloxregion</span><span style="color:#5a6a5a">:~</span>`; rrApplyUsername(); }
 						rightBody.innerHTML = '';
 
 						if (!document.getElementById('bloxregion-term-style')) {
@@ -3757,8 +3761,11 @@ async function regionSelectorInitiate() {
 								titleText.appendChild(img);
 							}
 							const userPart = document.createElement('span');
-							const rrUpSegs = [['#5a6a5a', 'root@'], ['#00ff9c', 'bloxregion'], ['#5a6a5a', ':~/'], ['#4a7bf7', (regionCode || '').toLowerCase()]];
+							const rrUpUser = document.createElement('span'); rrUpUser.style.color = '#5a6a5a'; rrUpUser.className = 'bloxregion-user'; rrUpUser.textContent = rrRobloxUsername; userPart.appendChild(rrUpUser);
+							const rrUpAt = document.createElement('span'); rrUpAt.style.color = '#5a6a5a'; rrUpAt.textContent = '@'; userPart.appendChild(rrUpAt);
+							const rrUpSegs = [['#00ff9c', 'bloxregion'], ['#5a6a5a', ':~/'], ['#4a7bf7', (regionCode || '').toLowerCase()]];
 							for (const rrSeg of rrUpSegs) { const sp = document.createElement('span'); sp.style.color = rrSeg[0]; sp.textContent = rrSeg[1]; userPart.appendChild(sp); }
+							rrApplyUsername();
 							titleText.appendChild(userPart);
 						}
 						rightBody.innerHTML = '';
@@ -3855,6 +3862,10 @@ async function regionSelectorInitiate() {
 				}
 				const RR_EGG_SOUNDS = { 67: 'idk/67.mp3', 770: 'idk/770.mp3' };
 				const RR_EGG_CHANCE = 0.01;
+				function rrApplyUsername() {
+					document.querySelectorAll('.bloxregion-user').forEach(el => el.textContent = rrRobloxUsername);
+					rrEnsureRobloxUsername();
+				}
 				async function rrEnsureRobloxUsername() {
 					if (rrRobloxUsername !== 'root') return;
 					try {
