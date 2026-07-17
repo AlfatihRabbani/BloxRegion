@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.7
+
+- The left panel header now reads "Server Region" (was "regions.list").
+- The terminal prompt now shows your Roblox username instead of "root"
+  (e.g. `yourname@bloxregion:~`), fetched from your logged-in session.
+
 ## 1.1.6
 
 - The boot screen's "Indexed N servers across M regions" line now updates

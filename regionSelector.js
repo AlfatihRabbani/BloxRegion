@@ -2236,6 +2236,8 @@ async function regionSelectorInitiate() {
 				let nextPageCursor = null;
 				let rrServersScanned = 0;
 				let rrEggPlayed = false;
+				let rrEggFreeze = {};
+				let rrRobloxUsername = 'root';
 				let rrEggLastCounts = {};
 				let rrEggAttempted = {};
 				let regionSpecificServers = {};
@@ -2363,6 +2365,7 @@ async function regionSelectorInitiate() {
 								regionSpecificServers = {};
 								nextPageCursor = null;
 								rrEggPlayed = false;
+								rrEggFreeze = {};
 								rrEggLastCounts = {};
 								rrEggAttempted = {};
 							} else {
@@ -3190,7 +3193,7 @@ async function regionSelectorInitiate() {
 						background: linear-gradient(180deg, #0d1411 0%, #0a0f0c 100%);
 					`;
 					const leftTitle = document.createElement('span');
-					leftTitle.innerHTML = `<span style="color:#c8d4c8">// </span><span style="color:#00ff9c">regions</span><span style="color:#5a6a5a">.list</span>`;
+					leftTitle.innerHTML = `<span style="color:#c8d4c8">// </span><span style="color:#00ff9c">Server Region</span>`;
 					leftTitle.style.cssText = `font-size: 14px; font-weight: 700; letter-spacing: 0.04em; text-transform: lowercase;`;
 
 					leftHeader.append(leftTitle);
@@ -3531,7 +3534,10 @@ async function regionSelectorInitiate() {
 						const promptRow = document.createElement('div');
 						promptRow.style.cssText = `display: flex; gap: 8px; align-items: center; padding-top: 4px;`;
 						const promptLabel = document.createElement('span');
-						promptLabel.innerHTML = `<span style="color:#00ff9c;font-weight:700">root@bloxregion</span><span style="color:#5a6a5a">:</span><span style="color:#4a7bf7">~</span><span style="color:#5a6a5a">$</span>`;
+						promptLabel.innerHTML = `<span style="color:#00ff9c;font-weight:700"><span class="bloxregion-user">root</span>@bloxregion</span><span style="color:#5a6a5a">:</span><span style="color:#4a7bf7">~</span><span style="color:#5a6a5a">$</span>`;
+						const rrPromptUser = promptLabel.querySelector('.bloxregion-user');
+						if (rrPromptUser) rrPromptUser.textContent = rrRobloxUsername;
+						rrEnsureRobloxUsername();
 						promptLabel.style.flexShrink = '0';
 						const input = document.createElement('input');
 						input.type = 'text';
@@ -3583,7 +3589,7 @@ async function regionSelectorInitiate() {
 
 						function runCommand(rawInput) {
 							const safe = String(rawInput).replace(/[<>&]/g, ch => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[ch]));
-							appendHistory(`<span style="color:#00ff9c;font-weight:700;flex-shrink:0">root@bloxregion</span><span style="color:#5a6a5a">:</span><span style="color:#4a7bf7">~</span><span style="color:#5a6a5a">$</span><span style="color:#c8d4c8">${safe}</span>`, true);
+							appendHistory(`<span style="color:#00ff9c;font-weight:700;flex-shrink:0"><span class="bloxregion-user">${rrRobloxUsername}</span>@bloxregion</span><span style="color:#5a6a5a">:</span><span style="color:#4a7bf7">~</span><span style="color:#5a6a5a">$</span><span style="color:#c8d4c8">${safe}</span>`, true);
 							const cmd = resolveCommand(rawInput);
 							if (!cmd) return;
 							if (cmd.kind === 'help') {
@@ -3849,6 +3855,18 @@ async function regionSelectorInitiate() {
 				}
 				const RR_EGG_SOUNDS = { 67: 'idk/67.mp3', 770: 'idk/770.mp3' };
 				const RR_EGG_CHANCE = 0.01;
+				async function rrEnsureRobloxUsername() {
+					if (rrRobloxUsername !== 'root') return;
+					try {
+						const res = await fetch('https://users.roblox.com/v1/users/authenticated', { credentials: 'include' });
+						if (!res.ok) return;
+						const d = await res.json();
+						if (d && d.name) {
+							rrRobloxUsername = d.name;
+							document.querySelectorAll('.bloxregion-user').forEach(el => el.textContent = rrRobloxUsername);
+						}
+					} catch (e) {}
+				}
 				function rrCheckCountEasterEgg(regionsData) {
 					for (const r of regionsData) {
 						const prev = rrEggLastCounts[r.code] || 0;
@@ -3862,10 +3880,17 @@ async function regionSelectorInitiate() {
 								rrEggAttempted[key] = true;
 								if (Math.random() < RR_EGG_CHANCE) {
 									rrEggPlayed = true;
+									rrEggFreeze[r.code] = threshold;
 									try {
 										const eggAudio = new Audio(chrome.runtime.getURL(RR_EGG_SOUNDS[threshold]));
-										eggAudio.play().catch(() => {});
-									} catch (e) {}
+										const rrUnfreeze = () => {
+											delete rrEggFreeze[r.code];
+											const lc = document.getElementById('roregion-region-list-container');
+											if (lc) { try { regionServersPopulate(lc); } catch (e) {} }
+										};
+										eggAudio.addEventListener('ended', rrUnfreeze);
+										eggAudio.play().catch(() => rrUnfreeze());
+									} catch (e) { delete rrEggFreeze[r.code]; }
 									return;
 								}
 							}
@@ -4077,7 +4102,7 @@ async function regionSelectorInitiate() {
 							rightSide.style.cssText = 'display: flex; align-items: center; gap: 6px; flex-shrink: 0;';
 
 							const countSpan = document.createElement('span');
-							countSpan.textContent = String(count);
+							countSpan.textContent = String(rrEggFreeze[regionCode] != null ? rrEggFreeze[regionCode] : count);
 							countSpan.style.cssText = `
                 font-size: 12px; font-weight: 700;
                 color: ${count > 0 ? '#00ff9c' : '#3a4a3a'};
