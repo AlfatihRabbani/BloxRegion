@@ -2521,42 +2521,43 @@ async function regionSelectorInitiate() {
 						serverIpMap = {};
 					}
 				})();
+				function rrReadMetaCsrf() {
+					const meta = document.querySelector('meta[name="csrf-token"]');
+					if (meta) { const t = meta.getAttribute('data-token') || meta.getAttribute('content'); if (t) return t; }
+					return null;
+				}
+				function rrReadMainWorldCsrf() {
+					return new Promise((resolve) => {
+						try {
+							const code = "try{var t=(window.Roblox&&Roblox.XsrfToken&&Roblox.XsrfToken.getToken&&Roblox.XsrfToken.getToken())||'';var d=document.getElementById('__rr_xsrf')||document.createElement('div');d.id='__rr_xsrf';d.setAttribute('data-token',t);d.style.display='none';document.documentElement.appendChild(d);}catch(e){}";
+							chrome.runtime.sendMessage({ action: 'injectScript', codeToInject: code }, () => {
+								setTimeout(() => {
+									const el = document.getElementById('__rr_xsrf');
+									const tok = el ? el.getAttribute('data-token') : null;
+									if (el) el.remove();
+									resolve(tok || null);
+								}, 60);
+							});
+						} catch (e) { resolve(null); }
+					});
+				}
 				async function getCsrfToken() {
-					if (csrfToken) {
-						return csrfToken;
-					}
+					if (csrfToken) return csrfToken;
+					let t = rrReadMetaCsrf();
+					if (t) { csrfToken = t; return t; }
+					t = await rrReadMainWorldCsrf();
+					if (t) { csrfToken = t; return t; }
 					try {
 						const response = await fetch('https://auth.roblox.com/v2/logout', {
 							method: 'POST',
-							headers: {
-								'Content-Type': 'application/json'
-							},
+							headers: { 'Content-Type': 'application/json' },
 							credentials: 'include'
 						});
-						const token = response.headers.get('x-csrf-token');
-						if (token) {
-							csrfToken = token;
-							return token;
-						} else {
-							const metaToken = document.querySelector('meta[name="csrf-token"]');
-							if (metaToken) {
-								const metaContent = metaToken.getAttribute('content');
-								csrfToken = metaContent;
-								return csrfToken;
-							}
-							csrfToken = null;
-							return null;
-						}
-					} catch (error) {
-						const metaToken = document.querySelector('meta[name="csrf-token"]');
-						if (metaToken) {
-							const metaContent = metaToken.getAttribute('content');
-							csrfToken = metaContent;
-							return csrfToken;
-						}
-						csrfToken = null;
-						return null;
-					}
+						const hdr = response.headers.get('x-csrf-token');
+						if (hdr) { csrfToken = hdr; return hdr; }
+					} catch (e) {}
+					csrfToken = null;
+					return null;
 				}
 				async function someActionThatNeedsCsrf() {
 					const token1 = await getCsrfToken();
@@ -4604,6 +4605,20 @@ async function regionSelectorInitiate() {
 					pingText.style.fontFamily = 'inherit';
 					pingText.style.fontSize = '12px';
 					pingContainer.appendChild(pingText);
+					const rrRegionCode = robloxServerPlaces[server.id] ? robloxServerPlaces[server.id].c : null;
+					if (rrRegionCode && rrRegionCode !== '??' && rrRegionCode !== '???') {
+						const rrRegionRow = document.createElement('div');
+						rrRegionRow.style.cssText = 'font-family: inherit; font-size: 12px; margin-bottom: 2px;';
+						const rrRegLbl = document.createElement('span');
+						rrRegLbl.style.color = '#5a6a5a';
+						rrRegLbl.textContent = 'region:';
+						const rrRegVal = document.createElement('span');
+						rrRegVal.style.color = '#00ff9c';
+						rrRegVal.style.fontWeight = '700';
+						rrRegVal.textContent = ' ' + (getFullLocationName(rrRegionCode) || rrRegionCode);
+						rrRegionRow.append(rrRegLbl, rrRegVal);
+						infoSection.appendChild(rrRegionRow);
+					}
 					infoSection.appendChild(pingContainer);
 					serverEntry.appendChild(infoSection);
 					const bottomRow = document.createElement('div');

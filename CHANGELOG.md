@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.8
+
+- **CSRF token no longer depends on the `auth.roblox.com/logout` request that
+  ad blockers (uBlock Origin) block.** `getCsrfToken` now tries, in order:
+  the page's `<meta name="csrf-token" data-token>` tag, then the page's own
+  `Roblox.XsrfToken` via main-world injection, and only falls back to the
+  logout request last. This fixes region resolution silently failing (all
+  counts stuck at 0) when uBlock is active.
+- Each server card now shows `region: <name>` above the ping line.
+
 ## 1.1.7
 
 - The left panel header now reads "Server Region" (was "regions.list").
