@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BloxRegion",
-  "version": "1.1.8",
+  "version": "1.1.9",
   "description": "Pick a Roblox server region with a terminal-style UI. Free and open source.",
   "short_name": "BloxRegion",
   "browser_specific_settings": {

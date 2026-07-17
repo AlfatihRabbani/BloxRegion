@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.9
+
+- The `region:` line on server cards now falls back to the current region view
+  if a per-server lookup ever misses, so it always shows.
+
 ## 1.1.8
 
 - **CSRF token no longer depends on the `auth.roblox.com/logout` request that

@@ -4605,7 +4605,7 @@ async function regionSelectorInitiate() {
 					pingText.style.fontFamily = 'inherit';
 					pingText.style.fontSize = '12px';
 					pingContainer.appendChild(pingText);
-					const rrRegionCode = robloxServerPlaces[server.id] ? robloxServerPlaces[server.id].c : null;
+					const rrRegionCode = (robloxServerPlaces[server.id] && robloxServerPlaces[server.id].c) || serverListState.currentRegion || null;
 					if (rrRegionCode && rrRegionCode !== '??' && rrRegionCode !== '???') {
 						const rrRegionRow = document.createElement('div');
 						rrRegionRow.style.cssText = 'font-family: inherit; font-size: 12px; margin-bottom: 2px;';
