@@ -1,15 +1,17 @@
 {
   "manifest_version": 3,
   "name": "BloxRegion",
-  "version": "1.1.7",
-  "description": "Pick a Roblox server region with a terminal-style UI. Free and open source.",
+  "version": "2.0",
+  "description": "Pick your Roblox server region in a Liquid Glass window, nearest servers first. Free and open source.",
   "short_name": "BloxRegion",
   "browser_specific_settings": {
     "gecko": {
       "id": "fatihmuhammad849@gmail.com",
       "strict_min_version": "140.0",
       "data_collection_permissions": {
-        "required": ["none"]
+        "required": [
+          "none"
+        ]
       }
     },
     "gecko_android": {
@@ -18,10 +20,17 @@
   },
   "content_scripts": [
     {
-      "matches": ["*://*.roblox.com/*"],
-      "js": ["regionSelector.js"],
+      "matches": [
+        "*://*.roblox.com/*"
+      ],
+      "js": [
+        "regionSelector.js"
+      ],
+      "css": [
+        "bloxregion.css"
+      ],
       "run_at": "document_end",
-      "all_frames": true
+      "all_frames": false
     }
   ],
   "permissions": [
@@ -35,7 +44,9 @@
     "*://*.geojs.io/*"
   ],
   "background": {
-    "scripts": ["background.js"]
+    "scripts": [
+      "background.js"
+    ]
   },
   "declarative_net_request": {
     "rule_resources": [
@@ -51,17 +62,6 @@
       }
     ]
   },
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "regionSelector.js",
-        "json/countries.json",
-        "icons/*.png",
-        "idk/*.mp3"
-      ],
-      "matches": ["*://*.roblox.com/*"]
-    }
-  ],
   "icons": {
     "16": "icons/icon-16.png",
     "48": "icons/icon-48.png",

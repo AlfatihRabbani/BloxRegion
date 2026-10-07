@@ -114,7 +114,31 @@ async function rrLookupIpRegion(ip) {
   return p;
 }
 
+// Approximate location of the player, used to order regions before the first
+// server lookup reports where Roblox itself places them.
+let brSelfGeo = null;
+async function brLookupSelfGeo() {
+  if (brSelfGeo) return brSelfGeo;
+  try {
+    const res = await fetch('https://get.geojs.io/v1/ip/geo.json');
+    if (!res.ok) return null;
+    const data = await res.json();
+    const la = parseFloat(data && data.latitude);
+    const lo = parseFloat(data && data.longitude);
+    if (!Number.isFinite(la) || !Number.isFinite(lo)) return null;
+    brSelfGeo = { la, lo };
+    return brSelfGeo;
+  } catch (e) {
+    return null;
+  }
+}
+
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
+
+  if (message.action === 'brSelfGeo') {
+    brLookupSelfGeo().then(geo => sendResponse(geo ? { success: true, la: geo.la, lo: geo.lo } : { success: false }));
+    return true;
+  }
 
   if (message.action === 'rrLookupIpRegion') {
     (async () => {

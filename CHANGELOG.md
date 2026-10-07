@@ -1,5 +1,48 @@
 # Changelog
 
+## 2.0
+
+- **Liquid Glass redesign** — BloxRegion now opens in a frosted-glass window
+  inspired by Apple's Liquid Glass: translucent panels with rim lighting, a
+  blurred backdrop of the game's artwork, and a sidebar of regions with flags,
+  live server counts and estimated ping. Follows Roblox's light or dark theme
+  automatically.
+- **Smoother, spring-based motion** — the window, views, sidebar selection,
+  sort control and cards all move on real spring curves. Regions glide into
+  place as they come online instead of the list being rebuilt, and counts
+  update without flicker. Respects "reduce motion".
+- **Fixed: Roblox's Play button stuck loading** — after Roblox's latest page
+  update, the Play button could stay on a spinner and couldn't be clicked while
+  BloxRegion was installed. The BloxRegion button now sits beside Play without
+  touching it.
+- **Faster scanning** — server lists are fetched ahead while servers are being
+  resolved, concurrency adapts to Roblox's rate limits, Roblox's datacenter
+  ranges are bundled (no large download before scanning starts), and nothing
+  waits on the page's language settings anymore. About twice as fast in
+  testing, and much faster when the tab is in the background.
+- **Instant re-opens** — resolved servers are remembered for 45 minutes, so
+  refreshing or coming back to a game shows its regions immediately and only
+  new servers are looked up.
+- **Nearest regions first** — your approximate location is known before the
+  first server resolves, so the "Nearest to you" regions, distance-sorted
+  continents and ping estimates appear right away. Ping estimates are also
+  more realistic.
+- **Overview** — live stats (servers indexed, regions online, scan progress and
+  speed) and the three nearest regions as cards with one-click **Join best**.
+- **Server cards** — player count with a capacity bar, player avatars, region
+  and estimated ping, FPS, and a Join button. Sort by best ping, most players
+  or fewest players; more cards load as you scroll, and newly found servers
+  appear on their own.
+- **Search and commands** — the search field filters regions as you type and
+  runs the same commands as before (`help`, `list`, `refresh`, `version`,
+  `credits`, `contacts`, region and continent names). Press `/` to search and
+  `Esc` to close. Click a continent's header to see all of its servers.
+- BloxRegion briefly pauses scanning when you press Play or Join, so it never
+  competes with Roblox while the game launches.
+- Clear messages when you're signed out of Roblox or a security token can't be
+  obtained, instead of empty counts.
+- Still zero errors and zero warnings in the Firefox add-on validator.
+
 ## 1.1.7
 
 - **★ Recommended regions** — the three regions closest to your location are
