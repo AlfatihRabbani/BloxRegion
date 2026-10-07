@@ -33,10 +33,19 @@
   and estimated ping, FPS, and a Join button. Sort by best ping, most players
   or fewest players; more cards load as you scroll, and newly found servers
   appear on their own.
-- **Search and commands** — the search field filters regions as you type and
-  runs the same commands as before (`help`, `list`, `refresh`, `version`,
-  `credits`, `contacts`, region and continent names). Press `/` to search and
-  `Esc` to close. Click a continent's header to see all of its servers.
+- **Friends** — a new Friends entry at the top of the sidebar shows which of
+  your Roblox friends are playing, grouped by the server they're in: friends in
+  this game first, then friends in other games, each with the server's region
+  and estimated ping and a Join button. Friends who are online but not in a game
+  are listed too. Servers with friends in them are marked in the region list and
+  on server cards ("with Alex & Sam").
+- **Command palette** — type `/` in the search field (or press `/` anywhere)
+  to see every command with a short description; keep typing to narrow it down
+  (`/h` → `/help`, `/home`), and matching regions and continents appear too.
+  Use the arrow keys and Enter, Tab to complete, or click. New commands:
+  `/friends`, `/nearest` (open the closest region) and `/join` (join the best
+  server near you). Plain text still filters the region list. Click a
+  continent's header to see all of its servers.
 - BloxRegion briefly pauses scanning when you press Play or Join, so it never
   competes with Roblox while the game launches.
 - Clear messages when you're signed out of Roblox or a security token can't be

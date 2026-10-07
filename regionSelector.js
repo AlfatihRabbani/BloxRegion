@@ -254,6 +254,8 @@
 		layers: [['path', { d: 'M12 4.5l8 4-8 4-8-4z' }], ['path', { d: 'M4 12.5l8 4 8-4' }], ['path', { d: 'M4 16.5l8 4 8-4' }]],
 		terminal: [['rect', { x: 3.5, y: 4.5, width: 17, height: 15, rx: 3 }], ['path', { d: 'M7.5 9.5l3 2.5-3 2.5M12.5 15h4' }]],
 		info: [['circle', { cx: 12, cy: 12, r: 9 }], ['path', { d: 'M12 11v5.5M12 7.8h.01' }]],
+		link: [['path', { d: 'M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1.2 1.2' }], ['path', { d: 'M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1.2-1.2' }]],
+		sparkle: [['path', { d: 'M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z' }], ['path', { d: 'M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z' }]],
 		warn: [['path', { d: 'M10.3 4.6L3.2 17.2a2 2 0 0 0 1.7 3h14.2a2 2 0 0 0 1.7-3L13.7 4.6a2 2 0 0 0-3.4 0z' }], ['path', { d: 'M12 9.5v4.5M12 17h.01' }]]
 	};
 	const FILLED_ICONS = new Set(['play', 'star']);
@@ -585,19 +587,29 @@
 		if (res && res.success) setUserLoc(res.la, res.lo, 'geo');
 	}
 
+	// Resolves to the signed-in user, or null when signed out.
+	let userReady = Promise.resolve(null);
 	async function loadUser() {
 		try {
 			const res = await fetch('https://users.roblox.com/v1/users/authenticated', { credentials: 'include' });
-			if (!res.ok) return;
+			if (!res.ok) return null;
 			const d = await res.json();
-			if (!d || !d.id) return;
+			if (!d || !d.id) return null;
 			S.user = { id: d.id, name: d.name, displayName: d.displayName || d.name, avatar: null };
 			scheduleUpdate();
-			const t = await fetch(`https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${encodeURIComponent(d.id)}&size=60x60&format=Png&isCircular=true`, { credentials: 'omit' });
+			loadUserAvatar(d.id);
+			return S.user;
+		} catch (e) {
+			return null;
+		}
+	}
+	async function loadUserAvatar(id) {
+		try {
+			const t = await fetch(`https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${encodeURIComponent(id)}&size=60x60&format=Png&isCircular=true`, { credentials: 'omit' });
 			if (!t.ok) return;
 			const td = await t.json();
 			const url = td && td.data && td.data[0] && td.data[0].imageUrl;
-			if (url) {
+			if (url && S.user) {
 				S.user.avatar = url;
 				scheduleUpdate();
 			}
@@ -738,42 +750,39 @@
 		}
 	}
 
-	let warnedNoEndpoint = false;
-	async function resolveServer(server, run) {
-		if (!S.csrf && !(await getCsrf())) {
-			S.authError = 'csrf';
-			return 'auth';
-		}
+	// Authenticated JSON POST to a Roblox API, refreshing the CSRF token when Roblox rotates it.
+	async function robloxPost(url, body) {
+		if (!S.csrf) await getCsrf();
 		let res = null;
 		for (let attempt = 0; attempt < 3; attempt++) {
-			try {
-				res = await fetch('https://gamejoin.roblox.com/v1/join-game-instance', {
-					method: 'POST',
-					credentials: 'include',
-					headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'X-Csrf-Token': S.csrf },
-					body: JSON.stringify({ placeId: Number(placeId), isTeleport: false, gameId: server.id, gameJoinAttemptId: crypto.randomUUID() })
-				});
-			} catch (e) {
-				return 'fail';
-			}
-			if (res.status === 403) {
-				const fresh = res.headers.get('x-csrf-token');
-				if (fresh && fresh !== S.csrf) {
-					S.csrf = fresh;
-					continue;
-				}
-			}
-			break;
+			res = await fetch(url, {
+				method: 'POST',
+				credentials: 'include',
+				headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'X-Csrf-Token': S.csrf || '' },
+				body: JSON.stringify(body)
+			});
+			const fresh = res.status === 403 && res.headers.get('x-csrf-token');
+			if (!fresh || fresh === S.csrf) break;
+			S.csrf = fresh;
 		}
-		if (run !== SCAN.run) return 'stale';
-		if (res.status === 429) return 'limited';
-		if (res.status === 401) {
-			S.authError = 'auth';
-			return 'auth';
+		return res;
+	}
+
+	// Asks gamejoin which datacenter a server (of any place) runs in.
+	let warnedNoEndpoint = false;
+	async function joinLookup(targetPlaceId, gameId) {
+		if (!S.csrf && !(await getCsrf())) return { result: 'csrf' };
+		let res;
+		try {
+			res = await robloxPost('https://gamejoin.roblox.com/v1/join-game-instance', { placeId: Number(targetPlaceId), isTeleport: false, gameId, gameJoinAttemptId: crypto.randomUUID() });
+		} catch (e) {
+			return { result: 'fail' };
 		}
-		if (!res.ok) return 'fail';
+		if (res.status === 429) return { result: 'limited' };
+		if (res.status === 401) return { result: 'auth' };
+		if (!res.ok) return { result: 'fail' };
 		let data;
-		try { data = await res.json(); } catch (e) { return 'fail'; }
+		try { data = await res.json(); } catch (e) { return { result: 'fail' }; }
 		const js = data && data.joinScript;
 		if (js && js.SessionId) {
 			try {
@@ -787,15 +796,28 @@
 				warnedNoEndpoint = true;
 				console.warn('[BloxRegion] join response had no UdmuxEndpoints (status ' + (data && data.status) + ')');
 			}
-			return 'fail';
+			return { result: 'fail' };
 		}
 		const loc = await locateIp(address);
-		if (run !== SCAN.run) return 'stale';
-		if (!loc) return 'fail';
-		applyResolution(server, loc.code, loc.la, loc.lo, loc.city);
-		S.jobCache.set(server.id, [loc.code, loc.la, loc.lo, loc.city, Date.now()]);
+		return loc ? { result: 'ok', loc } : { result: 'fail' };
+	}
+
+	function rememberJob(id, loc) {
+		S.jobCache.set(id, [loc.code, loc.la, loc.lo, loc.city, Date.now()]);
 		S.jobCacheDirty = true;
 		queueSave();
+	}
+
+	async function resolveServer(server, run) {
+		const r = await joinLookup(placeId, server.id);
+		if (run !== SCAN.run) return 'stale';
+		if (r.result === 'csrf' || r.result === 'auth') {
+			S.authError = r.result;
+			return 'auth';
+		}
+		if (r.result !== 'ok') return r.result;
+		applyResolution(server, r.loc.code, r.loc.la, r.loc.lo, r.loc.city);
+		rememberJob(server.id, r.loc);
 		return 'ok';
 	}
 
@@ -967,13 +989,212 @@
 	}, true);
 
 	// ---------------------------------------------------------------------------
+	// Friends: who is playing, in which server, and where that server is
+	// ---------------------------------------------------------------------------
+
+	const FRIENDS = {
+		state: 'idle',        // idle | loading | ready | error | signed-out
+		list: [],             // { id, name, displayName }
+		presence: new Map(),  // userId -> presence
+		avatars: new Map(),   // userId -> headshot url
+		regions: new Map(),   // gameId -> { code, la, lo } | null when it can't be resolved
+		updatedAt: 0,
+		loading: null
+	};
+	const FRIENDS_TTL = 20000;
+	const friendLookups = new Set();
+
+	async function fetchFriendList(userId) {
+		const res = await fetch(`https://friends.roblox.com/v1/users/${encodeURIComponent(userId)}/friends`, { credentials: 'include' });
+		if (!res.ok) throw new Error('friends ' + res.status);
+		const data = await res.json();
+		const list = ((data && data.data) || []).filter(f => f && f.id).map(f => ({ id: f.id, name: f.name || '', displayName: f.displayName || f.name || '' }));
+		// Some friend responses omit names; fill them in from the users API.
+		const nameless = list.filter(f => !f.name).map(f => f.id);
+		for (let i = 0; i < nameless.length; i += 100) {
+			try {
+				const r = await robloxPost('https://users.roblox.com/v1/users', { userIds: nameless.slice(i, i + 100), excludeBannedUsers: false });
+				const d = r.ok ? await r.json() : null;
+				for (const u of (d && d.data) || []) {
+					const f = list.find(x => x.id === u.id);
+					if (f) {
+						f.name = u.name;
+						f.displayName = u.displayName || u.name;
+					}
+				}
+			} catch (e) {}
+		}
+		return list;
+	}
+
+	async function fetchPresence(ids) {
+		const out = [];
+		for (let i = 0; i < ids.length; i += 50) {
+			const res = await robloxPost('https://presence.roblox.com/v1/presence/users', { userIds: ids.slice(i, i + 50) });
+			if (!res.ok) throw new Error('presence ' + res.status);
+			const d = await res.json();
+			out.push(...((d && d.userPresences) || []));
+		}
+		return out;
+	}
+
+	async function loadFriendAvatars() {
+		const ids = FRIENDS.list.filter(f => {
+			const p = FRIENDS.presence.get(f.id);
+			return p && p.userPresenceType > 0 && !FRIENDS.avatars.has(f.id);
+		}).map(f => f.id);
+		for (let i = 0; i < ids.length; i += 100) {
+			try {
+				const res = await fetch(`https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${ids.slice(i, i + 100).join(',')}&size=60x60&format=Png&isCircular=false`, { credentials: 'omit' });
+				const d = res.ok ? await res.json() : null;
+				for (const t of (d && d.data) || []) if (t.state === 'Completed' && t.imageUrl) FRIENDS.avatars.set(t.targetId, t.imageUrl);
+			} catch (e) {}
+		}
+		if (ids.length) scheduleUpdate();
+	}
+
+	function loadFriends(force) {
+		if (FRIENDS.loading) return FRIENDS.loading;
+		if (!force && FRIENDS.state === 'ready' && Date.now() - FRIENDS.updatedAt < FRIENDS_TTL) return Promise.resolve();
+		FRIENDS.loading = (async () => {
+			if (FRIENDS.state !== 'ready') FRIENDS.state = 'loading';
+			scheduleUpdate();
+			try {
+				const user = await userReady;
+				if (!user) {
+					FRIENDS.state = 'signed-out';
+					return;
+				}
+				if (!FRIENDS.list.length || force) FRIENDS.list = await fetchFriendList(user.id);
+				const presences = await fetchPresence(FRIENDS.list.map(f => f.id));
+				FRIENDS.presence = new Map(presences.map(p => [p.userId, p]));
+				FRIENDS.updatedAt = Date.now();
+				FRIENDS.state = 'ready';
+				loadFriendAvatars();
+				resolveFriendRegions();
+			} catch (e) {
+				if (FRIENDS.state !== 'ready') FRIENDS.state = 'error';
+			} finally {
+				FRIENDS.loading = null;
+				scheduleUpdate();
+			}
+		})();
+		return FRIENDS.loading;
+	}
+
+	// Groups friends by the server they're in: this game, other games, server hidden, or just online.
+	function friendGroups() {
+		const here = new Map(), elsewhere = new Map(), hidden = [], online = [];
+		for (const f of FRIENDS.list) {
+			const p = FRIENDS.presence.get(f.id);
+			if (!p) continue;
+			const type = p.userPresenceType;
+			if (type === 2 && p.gameId && p.placeId) {
+				const isHere = String(p.placeId) === placeId || String(p.rootPlaceId) === placeId;
+				const bucket = isHere ? here : elsewhere;
+				let g = bucket.get(p.gameId);
+				if (!g) bucket.set(p.gameId, g = { key: p.gameId, gameId: p.gameId, placeId: p.placeId, game: p.lastLocation || 'Roblox experience', here: isHere, friends: [] });
+				g.friends.push(f);
+			} else if (type === 2) {
+				hidden.push({ key: 'hidden:' + f.id, gameId: null, placeId: p.placeId || null, game: p.lastLocation || 'In a game', here: false, hidden: true, friends: [f] });
+			} else if (type === 1 || type === 3) {
+				online.push({ friend: f, where: type === 3 ? 'In Studio' : 'Online' });
+			}
+		}
+		return { here: [...here.values()], elsewhere: [...elsewhere.values()], hidden, online };
+	}
+
+	function friendSummary() {
+		if (FRIENDS.state === 'signed-out') return { count: 0, sub: 'Sign in to see friends', here: 0 };
+		if (FRIENDS.state !== 'ready') return { count: 0, sub: FRIENDS.state === 'error' ? 'Couldn’t load friends' : 'Loading…', here: 0 };
+		const g = friendGroups();
+		const here = g.here.reduce((n, x) => n + x.friends.length, 0);
+		const playing = here + g.elsewhere.reduce((n, x) => n + x.friends.length, 0) + g.hidden.length;
+		let sub = 'No one online';
+		if (playing) sub = here ? `${here} here · ${playing} playing` : `${playing} playing`;
+		else if (g.online.length) sub = `${g.online.length} online`;
+		return { count: playing, sub, here, online: g.online.length };
+	}
+
+	// Friends in a given server of this game (for badges on server cards).
+	function friendsInServer(serverId) {
+		const out = [];
+		for (const f of FRIENDS.list) {
+			const p = FRIENDS.presence.get(f.id);
+			if (p && p.userPresenceType === 2 && p.gameId === serverId) out.push(f);
+		}
+		return out;
+	}
+
+	// Regions (in this game) that currently have at least one friend in them.
+	function friendRegionCodes() {
+		const codes = new Set();
+		for (const g of friendGroups().here) {
+			const r = FRIENDS.regions.get(g.gameId);
+			if (r) codes.add(r.code);
+		}
+		return codes;
+	}
+
+	function resolveFriendRegions() {
+		const { here, elsewhere } = friendGroups();
+		for (const g of [...here, ...elsewhere]) {
+			if (FRIENDS.regions.has(g.gameId) || friendLookups.has(g.gameId)) continue;
+			const known = S.placeOf.get(g.gameId);
+			if (known && known.c !== '??') {
+				FRIENDS.regions.set(g.gameId, { code: known.c, la: known.l ? known.l.la : null, lo: known.l ? known.l.lo : null });
+				continue;
+			}
+			const cached = S.jobCache.get(g.gameId);
+			if (cached && Date.now() - cached[4] < JOB_TTL) {
+				FRIENDS.regions.set(g.gameId, { code: cached[0], la: cached[1], lo: cached[2] });
+				continue;
+			}
+			friendLookups.add(g.gameId);
+			lookupFriendServer(g).finally(() => friendLookups.delete(g.gameId));
+		}
+	}
+
+	async function lookupFriendServer(g) {
+		for (let attempt = 0; attempt < 3; attempt++) {
+			const r = await joinLookup(g.placeId, g.gameId);
+			if (r.result === 'ok') {
+				FRIENDS.regions.set(g.gameId, { code: r.loc.code, la: r.loc.la, lo: r.loc.lo });
+				rememberJob(g.gameId, r.loc);
+				scheduleUpdate();
+				return;
+			}
+			if (r.result !== 'limited') break;
+			await sleep(1200 * (attempt + 1));
+		}
+		// Full or restricted servers don't reveal their address.
+		FRIENDS.regions.set(g.gameId, null);
+		scheduleUpdate();
+	}
+
+	function friendNames(friends) {
+		const names = friends.map(f => f.displayName || f.name);
+		if (names.length <= 1) return names[0] || '';
+		if (names.length === 2) return names[0] + ' & ' + names[1];
+		return names[0] + ', ' + names[1] + ' +' + (names.length - 2);
+	}
+
+	// ---------------------------------------------------------------------------
 	// Joining
 	// ---------------------------------------------------------------------------
 
-	function joinServer(serverId, code) {
+	function joinServer(serverId, code, targetPlaceId = placeId) {
 		pauseForLaunch(15000);
-		runInPage(`(function(){try{var L=window.Roblox&&Roblox.GameLauncher;if(L&&L.joinGameInstance){L.joinGameInstance(${Number(placeId)},${JSON.stringify(String(serverId))});}}catch(e){}})();`);
+		runInPage(`(function(){try{var L=window.Roblox&&Roblox.GameLauncher;if(L&&L.joinGameInstance){L.joinGameInstance(${Number(targetPlaceId)},${JSON.stringify(String(serverId))});}}catch(e){}})();`);
 		toast(code ? 'Launching Roblox · ' + regionTitle(code) : 'Launching Roblox…', 'play');
+		setTimeout(closeWindow, 500);
+	}
+
+	// Roblox's own "join friend" flow, which also handles friends whose server is hidden.
+	function followFriend(friend) {
+		pauseForLaunch(15000);
+		runInPage(`(function(){try{var L=window.Roblox&&Roblox.GameLauncher;if(L&&L.followPlayerIntoGame){L.followPlayerIntoGame(${Number(friend.id)});}}catch(e){}})();`);
+		toast('Joining ' + (friend.displayName || friend.name) + '…', 'people');
 		setTimeout(closeWindow, 500);
 	}
 
@@ -1124,6 +1345,7 @@
 		renderSidebar();
 		showView(overviewView(), false);
 		runUpdate();
+		loadFriends();
 		requestAnimationFrame(() => requestAnimationFrame(() => root.classList.add('is-open')));
 		setTimeout(() => { if (UI.input) UI.input.focus({ preventScroll: true }); }, 180);
 	}
@@ -1158,7 +1380,14 @@
 			} else {
 				closeWindow();
 			}
-		} else if ((e.key === '/' && !typing) || ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 'k')) {
+		} else if (e.key === '/' && !typing) {
+			// "/" opens the command palette with every command listed.
+			e.preventDefault();
+			if (UI.input) {
+				UI.input.focus();
+				setSearch('/');
+			}
+		} else if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === 'k') {
 			e.preventDefault();
 			if (UI.input) {
 				UI.input.focus();
@@ -1170,14 +1399,37 @@
 	// ----- Sidebar ---------------------------------------------------------------
 
 	function buildSidebar() {
-		const input = h('input', { type: 'text', placeholder: 'Search or type a command', spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Search regions or run a command' });
-		input.addEventListener('input', () => {
-			UI.search = input.value.trim().toLowerCase();
-			renderSidebar();
-		});
+		const input = h('input', { type: 'text', placeholder: 'Search, or type / for commands', spellcheck: 'false', autocomplete: 'off', role: 'combobox', 'aria-autocomplete': 'list', 'aria-expanded': 'false', 'aria-label': 'Search regions or run a command' });
+		const suggest = h('div', { class: 'br-suggest is-hidden', role: 'listbox', 'aria-label': 'Suggestions' });
+		UI.sug = { el: suggest, items: [], active: 0, query: null };
+		input.addEventListener('input', () => setSearch(input.value, true));
+		input.addEventListener('focus', renderSuggestions);
+		input.addEventListener('blur', () => setTimeout(() => {
+			if (UI.input && document.activeElement !== UI.input) hideSuggestions();
+		}, 120));
 		input.addEventListener('keydown', e => {
+			const sug = UI.sug;
+			const open = !suggest.classList.contains('is-hidden') && sug.items.length > 0;
+			if (open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+				e.preventDefault();
+				const n = sug.items.length;
+				setActiveSuggestion((sug.active + (e.key === 'ArrowDown' ? 1 : n - 1)) % n);
+				return;
+			}
+			if (open && e.key === 'Tab') {
+				const item = sug.items[sug.active];
+				if (item && item.fill) {
+					e.preventDefault();
+					setSearch(item.fill + ' ');
+				}
+				return;
+			}
 			if (e.key !== 'Enter') return;
 			e.preventDefault();
+			if (open) {
+				pickSuggestion(sug.active);
+				return;
+			}
 			const value = input.value.trim();
 			if (!value) return;
 			setSearch('');
@@ -1202,23 +1454,187 @@
 				h('div', { class: 'br-appicon' }, icon('globe')),
 				h('div', { class: 'br-app-name' }, h('div', { class: 'br-app-title', text: 'BloxRegion' }), h('div', { class: 'br-app-game', text: gameName() })),
 				h('span', { class: 'br-ver', text: 'v' + VERSION })),
-			h('label', { class: 'br-search' }, icon('search'), input, h('span', { class: 'br-kbd', text: '/' })),
+			h('div', { class: 'br-search-wrap' },
+				h('label', { class: 'br-search' }, icon('search'), input, h('span', { class: 'br-kbd', text: '/' })),
+				suggest),
 			list,
 			h('div', { class: 'br-side-foot' }, avatar, h('span', { class: 'br-user' }, userName, userHandle), live));
 	}
 
-	function setSearch(value) {
+	// Text starting with "/" drives the command palette; anything else filters the sidebar.
+	function setSearch(value, fromInput) {
 		if (!UI.input) return;
-		UI.input.value = value;
-		UI.search = value.trim().toLowerCase();
-		renderSidebar();
+		if (!fromInput) UI.input.value = value;
+		const slash = value.trimStart().startsWith('/');
+		const search = slash ? '' : value.trim().toLowerCase();
+		if (search !== UI.search) {
+			UI.search = search;
+			renderSidebar();
+		}
+		renderSuggestions();
+	}
+
+	// ----- Command palette ----------------------------------------------------------
+
+	const SLASH_COMMANDS = [
+		{ cmd: 'help', icon: 'info', desc: 'Show every command', alias: ['?'] },
+		{ cmd: 'friends', icon: 'people', desc: 'See where your friends are playing', alias: ['friend'] },
+		{ cmd: 'nearest', icon: 'star', desc: 'Open the region closest to you', alias: ['near', 'closest'] },
+		{ cmd: 'join', icon: 'play', desc: 'Join the best server near you', alias: ['play', 'best'] },
+		{ cmd: 'refresh', icon: 'refresh', desc: 'Scan all servers again', alias: ['reload'] },
+		{ cmd: 'home', icon: 'house', desc: 'Back to the overview', alias: ['overview', 'clear', 'cls'] },
+		{ cmd: 'list', icon: 'layers', desc: 'Every region with its server count', alias: ['ls'] },
+		{ cmd: 'version', icon: 'bolt', desc: 'Show the installed version', alias: ['ver'] },
+		{ cmd: 'credits', icon: 'sparkle', desc: 'Who made BloxRegion' },
+		{ cmd: 'contacts', icon: 'link', desc: 'Contact links', alias: ['contact'] },
+		{ cmd: 'exit', icon: 'close', desc: 'Close BloxRegion', alias: ['quit', 'close'] }
+	];
+
+	function buildSuggestions(q) {
+		const items = [];
+		const scored = [];
+		for (const c of SLASH_COMMANDS) {
+			const names = [c.cmd, ...(c.alias || [])];
+			let score = -1;
+			if (!q) score = 0;
+			else if (c.cmd.startsWith(q)) score = 3;
+			else if (names.some(n => n.startsWith(q))) score = 2;
+			else if (q.length >= 3 && (c.cmd.includes(q) || c.desc.toLowerCase().includes(q))) score = 1;
+			if (score >= 0) scored.push([c, score]);
+		}
+		scored.sort((a, b) => b[1] - a[1]);
+		for (const [c] of scored) {
+			items.push({ group: 'Commands', icon: c.icon, label: '/' + c.cmd, mono: true, desc: c.desc, fill: '/' + c.cmd, run: () => runCommand('/' + c.cmd) });
+		}
+		// Places only match from two letters on, and only at the start of a word,
+		// so "/h" lists just /help and /home.
+		if (q.length < 2) return items;
+		const wordStart = text => {
+			const t = text.toLowerCase();
+			return t.startsWith(q) || t.includes(' ' + q) || t.includes('-' + q);
+		};
+		for (const name of CONTINENTS) {
+			if (!wordStart(name)) continue;
+			const total = continentServers(name).length;
+			items.push({ group: 'Continents', icon: 'layers', label: name, desc: fmt(total) + (total === 1 ? ' server' : ' servers'), run: () => showContinent(name) });
+		}
+		const regions = allRegionCodes()
+			.filter(code => {
+				const r = regionInfo(code);
+				return wordStart([code, r.city, r.country, r.state].filter(Boolean).join(' '));
+			})
+			.sort((a, b) => {
+				const sa = regionTitle(a).toLowerCase().startsWith(q) ? 0 : 1, sb = regionTitle(b).toLowerCase().startsWith(q) ? 0 : 1;
+				if (sa !== sb) return sa - sb;
+				const da = regionDistance(a), db = regionDistance(b);
+				return Number.isFinite(da) && Number.isFinite(db) ? da - db : 0;
+			})
+			.slice(0, 5);
+		for (const code of regions) {
+			const n = S.counts[code] || 0;
+			items.push({ group: 'Regions', flag: code, label: regionTitle(code), desc: (regionPlace(code) || regionInfo(code).continent) + ' · ' + fmt(n) + (n === 1 ? ' server' : ' servers'), run: () => selectRegion(code) });
+		}
+		return items;
+	}
+
+	// Label with the typed text emphasised, e.g. "/h" → **/h**elp.
+	function highlight(label, q) {
+		const span = h('span', { class: 'br-sug-label' });
+		const lower = label.toLowerCase();
+		const needle = label.startsWith('/') ? '/' + q : q;
+		const at = q ? lower.indexOf(needle) : -1;
+		if (at < 0) {
+			span.textContent = label;
+			return span;
+		}
+		span.append(label.slice(0, at), h('b', { class: 'br-sug-hit', text: label.slice(at, at + needle.length) }), label.slice(at + needle.length));
+		return span;
+	}
+
+	function renderSuggestions() {
+		const sug = UI.sug;
+		if (!sug || !UI.input) return;
+		const value = UI.input.value.trimStart();
+		if (document.activeElement !== UI.input || !value.startsWith('/')) {
+			hideSuggestions();
+			return;
+		}
+		const q = value.slice(1).trim().toLowerCase();
+		if (q === sug.query && !sug.el.classList.contains('is-hidden')) return;
+		if (q !== sug.query) sug.active = 0;
+		sug.query = q;
+		sug.items = buildSuggestions(q);
+		sug.el.textContent = '';
+		if (!sug.items.length) {
+			sug.el.append(h('div', { class: 'br-sug-empty', text: 'No commands or regions match “' + q + '”' }));
+		}
+		let group = null;
+		sug.items.forEach((item, i) => {
+			if (item.group !== group) {
+				group = item.group;
+				sug.el.append(h('div', { class: 'br-sug-h', text: group }));
+			}
+			const lead = item.flag ? flag(item.flag) : h('span', { class: 'br-sug-icon' }, icon(item.icon));
+			const label = highlight(item.label, q);
+			if (item.mono) label.classList.add('is-mono');
+			const el = h('button', { type: 'button', class: 'br-sug', role: 'option', tabindex: '-1' },
+				lead,
+				h('span', { class: 'br-sug-text' }, label, h('span', { class: 'br-sug-desc', text: item.desc })),
+				h('span', { class: 'br-sug-enter', text: '↵' }));
+			el.style.animationDelay = Math.min(i, 10) * 18 + 'ms';
+			// Keep focus in the search field so typing can continue.
+			el.addEventListener('mousedown', e => e.preventDefault());
+			el.addEventListener('mousemove', () => {
+				if (sug.active !== i) setActiveSuggestion(i, true);
+			});
+			el.addEventListener('click', () => pickSuggestion(i));
+			item.el = el;
+			sug.el.append(el);
+		});
+		setActiveSuggestion(Math.min(sug.active, Math.max(0, sug.items.length - 1)), true);
+		if (sug.el.classList.contains('is-hidden')) {
+			// Animate in only when the palette opens, not on every keystroke.
+			sug.el.classList.remove('is-hidden');
+			restartAnimation(sug.el, 'is-in');
+			clearTimeout(sug.inTimer);
+			sug.inTimer = setTimeout(() => sug.el.classList.remove('is-in'), 520);
+			UI.input.setAttribute('aria-expanded', 'true');
+		}
+	}
+
+	function setActiveSuggestion(i, fromPointer) {
+		const sug = UI.sug;
+		sug.active = i;
+		sug.items.forEach((item, j) => {
+			item.el.classList.toggle('is-active', j === i);
+			item.el.setAttribute('aria-selected', String(j === i));
+		});
+		const el = sug.items[i] && sug.items[i].el;
+		if (el && !fromPointer) el.scrollIntoView({ block: 'nearest' });
+	}
+
+	function pickSuggestion(i) {
+		const item = UI.sug.items[i];
+		if (!item) return;
+		setSearch('');
+		hideSuggestions();
+		item.run();
+	}
+
+	function hideSuggestions() {
+		const sug = UI.sug;
+		if (!sug || sug.el.classList.contains('is-hidden')) return;
+		sug.el.classList.add('is-hidden');
+		sug.query = null;
+		if (UI.input) UI.input.setAttribute('aria-expanded', 'false');
 	}
 
 	function sidebarModel() {
 		const q = UI.search;
 		const match = code => !q || regionSearchText(code).includes(q);
 		const sections = [];
-		if (!q || 'overview home'.includes(q)) sections.push({ id: 'nav', items: [{ key: 'overview', nav: true }] });
+		const nav = [{ key: 'overview', nav: 'overview', words: 'overview home' }, { key: 'friends', nav: 'friends', words: 'friends people' }].filter(n => !q || n.words.includes(q));
+		if (nav.length) sections.push({ id: 'nav', items: nav });
 		const near = nearestCodes(3).filter(match);
 		if (near.length) sections.push({ id: 'near', title: 'Nearest to you', rec: true, items: near.map(code => ({ key: 'near:' + code, code })) });
 		for (const [name, codes] of continentGroups()) {
@@ -1247,20 +1663,32 @@
 	}
 
 	function buildRow(item) {
-		if (item.nav) {
+		if (item.nav === 'overview') {
 			const el = h('button', { type: 'button', class: 'br-row', 'data-key': item.key },
 				h('span', { class: 'br-row-icon' }, icon('house')),
 				h('span', { class: 'br-row-text' }, h('span', { class: 'br-row-title', text: 'Overview' }), h('span', { class: 'br-row-sub', text: 'Nearest regions and live stats' })));
 			el.addEventListener('click', selectOverview);
-			return { el, nav: true };
+			return { el, nav: 'overview' };
+		}
+		if (item.nav === 'friends') {
+			const count = h('span', { class: 'br-count is-zero', text: '0' });
+			const sub = h('span', { class: 'br-row-sub', text: 'Loading…' });
+			const el = h('button', { type: 'button', class: 'br-row', 'data-key': item.key },
+				h('span', { class: 'br-row-icon is-accent' }, icon('people')),
+				h('span', { class: 'br-row-text' }, h('span', { class: 'br-row-title', text: 'Friends' }), sub),
+				count);
+			el.addEventListener('click', selectFriends);
+			return { el, nav: 'friends', countEl: count, subEl: sub, lastCount: 0 };
 		}
 		const code = item.code;
 		const count = h('span', { class: 'br-count', text: '0' });
 		const sub = h('span', { class: 'br-row-sub' });
 		const quick = h('span', { class: 'br-quick', title: 'Join the best ' + regionTitle(code) + ' server', 'aria-hidden': 'true' }, icon('play'));
+		const friendMark = h('span', { class: 'br-row-friend', title: 'Friends are playing here' }, icon('people'));
 		const el = h('button', { type: 'button', class: 'br-row is-empty', 'data-key': item.key, 'aria-label': regionFullName(code) },
 			flag(code),
 			h('span', { class: 'br-row-text' }, h('span', { class: 'br-row-title', text: regionTitle(code) }), sub),
+			friendMark,
 			count,
 			quick);
 		el.addEventListener('click', e => {
@@ -1274,8 +1702,20 @@
 		return { el, code, countEl: count, subEl: sub, lastCount: 0, lastSub: null };
 	}
 
-	function updateRow(row) {
-		if (row.nav) return;
+	function updateRow(row, friendCodes) {
+		if (row.nav === 'overview') return;
+		if (row.nav === 'friends') {
+			const f = friendSummary();
+			if (f.count !== row.lastCount) {
+				setText(row.countEl, fmt(f.count));
+				row.countEl.classList.toggle('is-zero', f.count === 0);
+				if (row.lastCount === 0 && f.count > 0 && UI.sideReady) restartAnimation(row.countEl, 'is-bump');
+				row.lastCount = f.count;
+			}
+			setText(row.subEl, f.sub);
+			return;
+		}
+		row.el.classList.toggle('has-friends', !!friendCodes && friendCodes.has(row.code));
 		const n = S.counts[row.code] || 0;
 		if (n !== row.lastCount) {
 			row.countEl.textContent = fmt(n);
@@ -1301,6 +1741,7 @@
 		const list = UI.sideList;
 		if (!list) return;
 		const model = sidebarModel();
+		const friendCodes = friendRegionCodes();
 		const animate = UI.sideReady && !REDUCED_MOTION;
 		const before = new Map();
 		if (animate) {
@@ -1327,7 +1768,7 @@
 					UI.rows.set(item.key, row);
 					if (UI.sideReady) row.el.classList.add('is-new');
 				}
-				updateRow(row);
+				updateRow(row, friendCodes);
 				if (section.body.children[i] !== row.el) section.body.insertBefore(row.el, section.body.children[i] || null);
 				seen.add(item.key);
 			});
@@ -1511,6 +1952,7 @@
 		hideConsole();
 		toast('Refreshing servers…', 'refresh');
 		startScan();
+		loadFriends(true);
 	}
 
 	// ----- Views -----------------------------------------------------------------
@@ -1558,6 +2000,186 @@
 		positionPill(true);
 		if (UI.view && UI.view.kind === 'continent' && UI.view.name === name) return;
 		showView(serverListView({ kind: 'continent', name }));
+	}
+
+	function selectFriends() {
+		UI.selKey = 'friends';
+		positionPill(true);
+		if (UI.view && UI.view.kind === 'friends') return;
+		showView(friendsView());
+	}
+
+	// ----- Friends view -------------------------------------------------------------
+
+	function friendAvatars(friends, max) {
+		const wrap = h('span', { class: 'br-friend-avs' });
+		for (const f of friends.slice(0, max)) {
+			const img = h('img', { alt: '' });
+			img.addEventListener('load', () => img.classList.add('is-loaded'));
+			const url = FRIENDS.avatars.get(f.id);
+			if (url) img.src = url;
+			wrap.append(h('span', { class: 'br-av' }, img));
+		}
+		return wrap;
+	}
+
+	function friendCard(index) {
+		const gameEl = h('span', { class: 'br-game' });
+		const playersEl = h('span', { class: 'br-fps' });
+		const friendsRow = h('div', { class: 'br-card-friends' });
+		const regionV = h('span', { class: 'br-v' });
+		const pingV = h('span', { class: 'br-v' });
+		const joinLabel = h('span', { text: 'Join' });
+		const join = h('button', { type: 'button', class: 'br-btn is-primary' }, icon('play'), joinLabel);
+		const el = h('article', { class: 'br-card br-shine is-friend' },
+			h('div', { class: 'br-card-top' }, gameEl, playersEl),
+			friendsRow,
+			h('div', { class: 'br-meta' }, h('span', { class: 'br-k', text: 'Region' }), regionV, h('span', { class: 'br-k', text: 'Ping' }), pingV),
+			join);
+		el.style.animationDelay = Math.min(index, 8) * 40 + 'ms';
+		let group = null;
+		let signature = '';
+		join.addEventListener('click', () => {
+			if (!group) return;
+			if (group.gameId) {
+				const r = FRIENDS.regions.get(group.gameId);
+				joinServer(group.gameId, r ? r.code : null, group.placeId);
+			} else {
+				followFriend(group.friends[0]);
+			}
+		});
+		return {
+			el,
+			update(next) {
+				group = next;
+				const region = next.gameId ? FRIENDS.regions.get(next.gameId) : null;
+				const pending = !!next.gameId && !FRIENDS.regions.has(next.gameId);
+				const server = next.gameId && next.here ? S.servers.get(next.gameId) : null;
+				const sig = [next.game, next.here, next.friends.map(f => f.id + (FRIENDS.avatars.has(f.id) ? '+' : '')).join(','),
+					region ? region.code : pending ? 'pending' : 'none', server ? server.playing : '', S.userLoc ? 'loc' : ''].join('|');
+				if (sig === signature) return;
+				signature = sig;
+				gameEl.textContent = '';
+				if (next.here) gameEl.append(h('span', { class: 'br-tag', text: 'This game' }));
+				else gameEl.append(next.game);
+				playersEl.textContent = server ? `${server.playing || 0}/${server.maxPlayers || '?'} players` : '';
+				friendsRow.textContent = '';
+				friendsRow.append(friendAvatars(next.friends, 4), h('span', { class: 'br-friend-names', text: friendNames(next.friends) }));
+				regionV.textContent = '';
+				pingV.className = 'br-v';
+				if (region) {
+					regionV.append(flag(region.code, 'sm'), regionTitle(region.code));
+					const ping = S.userLoc && region.la != null ? estPing(distanceKm(S.userLoc, region)) : regionPing(region.code);
+					pingV.textContent = Number.isFinite(ping) ? '~' + ping + ' ms' : '—';
+					if (pingTier(ping)) pingV.classList.add('is-' + pingTier(ping));
+				} else {
+					regionV.textContent = next.hidden ? 'Hidden' : pending ? 'Looking up…' : 'Unavailable';
+					regionV.title = next.hidden ? 'Their privacy settings hide which server they’re in' : pending ? '' : 'Full or private servers don’t reveal their location';
+					pingV.textContent = '—';
+				}
+				joinLabel.textContent = next.hidden ? 'Try to join' : 'Join';
+			}
+		};
+	}
+
+	function friendsView() {
+		const el = h('section', { class: 'br-view is-friends' });
+		const emptyTitle = h('b');
+		const emptySub = h('span');
+		const empty = h('div', { class: 'br-empty is-hidden' }, icon('people'), emptyTitle, emptySub);
+		const makeSection = title => {
+			const count = h('span');
+			const body = h('div', { class: 'br-grid' });
+			const sec = h('div', { class: 'br-friend-sec is-hidden' }, h('div', { class: 'br-h2' }, h('h2', { text: title }), count), body);
+			return { el: sec, count, body };
+		};
+		const secHere = makeSection('In this game');
+		const secElse = makeSection('In other games');
+		const onlineCount = h('span');
+		const people = h('div', { class: 'br-people' });
+		const secOnline = { el: h('div', { class: 'br-friend-sec is-hidden' }, h('div', { class: 'br-h2' }, h('h2', { text: 'Online' }), onlineCount), people) };
+		el.append(empty, secHere.el, secElse.el, secOnline.el);
+
+		const cards = new Map();
+		let peopleKey = null;
+		loadFriends(false);
+		const timer = setInterval(() => loadFriends(true), 30000);
+
+		function fillGrid(section, groups) {
+			section.el.classList.toggle('is-hidden', groups.length === 0);
+			const players = groups.reduce((n, g) => n + g.friends.length, 0);
+			setText(section.count, players ? players + (players === 1 ? ' friend' : ' friends') : '');
+			groups.forEach((g, i) => {
+				let card = cards.get(g.key);
+				if (!card) {
+					card = friendCard(i);
+					cards.set(g.key, card);
+				}
+				card.update(g);
+				card.seen = true;
+				if (section.body.children[i] !== card.el) section.body.insertBefore(card.el, section.body.children[i] || null);
+			});
+		}
+
+		function update() {
+			const g = friendGroups();
+			const summary = friendSummary();
+			const here = g.here;
+			const elsewhere = [...g.elsewhere, ...g.hidden];
+			const ready = FRIENDS.state === 'ready';
+
+			if (ready) setTitle(null, 'Friends', `${summary.here} in this game · ${summary.count - summary.here} in other games · ${g.online.length} online`);
+			else setTitle(null, 'Friends', summary.sub);
+
+			for (const card of cards.values()) card.seen = false;
+			fillGrid(secHere, ready ? here : []);
+			fillGrid(secElse, ready ? elsewhere : []);
+			for (const [key, card] of cards) {
+				if (!card.seen) {
+					card.el.remove();
+					cards.delete(key);
+				}
+			}
+
+			const online = ready ? g.online : [];
+			secOnline.el.classList.toggle('is-hidden', online.length === 0);
+			setText(onlineCount, online.length ? online.length + ' not in a game' : '');
+			const key = online.map(o => o.friend.id + o.where + (FRIENDS.avatars.has(o.friend.id) ? '+' : '')).join(',');
+			if (key !== peopleKey) {
+				peopleKey = key;
+				people.textContent = '';
+				online.forEach((o, i) => {
+					const chip = h('a', { class: 'br-person', href: `https://www.roblox.com/users/${o.friend.id}/profile`, target: '_blank', rel: 'noopener noreferrer', title: 'Open ' + (o.friend.displayName || o.friend.name) + '’s profile' },
+						friendAvatars([o.friend], 1),
+						h('span', { class: 'br-person-text' }, h('span', { text: o.friend.displayName || o.friend.name }), h('small', { text: o.where })));
+					chip.style.animationDelay = Math.min(i, 10) * 30 + 'ms';
+					people.append(chip);
+				});
+			}
+
+			let title = '', sub = '';
+			if (FRIENDS.state === 'signed-out') {
+				title = 'Sign in to see your friends';
+				sub = 'BloxRegion shows which servers your Roblox friends are in, and where those servers are.';
+			} else if (FRIENDS.state === 'error') {
+				title = 'Couldn’t load your friends';
+				sub = 'Roblox may be busy. Try the refresh button in a moment.';
+			} else if (!ready) {
+				title = 'Finding your friends…';
+				sub = 'Checking who’s online and which servers they’re in.';
+			} else if (!FRIENDS.list.length) {
+				title = 'No friends yet';
+				sub = 'Add friends on Roblox and they’ll show up here when they play.';
+			} else if (!here.length && !elsewhere.length && !online.length) {
+				title = 'None of your friends are online';
+				sub = 'This list refreshes on its own every 30 seconds.';
+			}
+			empty.classList.toggle('is-hidden', !title);
+			setText(emptyTitle, title);
+			setText(emptySub, sub);
+		}
+
+		return { el, kind: 'friends', sortable: false, update, destroy() { clearInterval(timer); } };
 	}
 
 	function statTile(iconName, label) {
@@ -1617,8 +2239,8 @@
 			h('div', { class: 'br-h2' }, h('h2', { text: 'Nearest to you' }), recNote), recGrid,
 			h('div', { class: 'br-h2' }, h('h2', { text: 'Continents' })), chips,
 			h('div', { class: 'br-note' }, icon('terminal'), h('div', {},
-				'Type ', codeTag('help'), ' in the search field for commands like ', codeTag('refresh'), ', ', codeTag('list'), ' and ', codeTag('version'),
-				'. Press ', codeTag('/'), ' to search from anywhere, ', codeTag('Esc'), ' to close.')));
+				'Press ', codeTag('/'), ' anywhere to see every command, like ', codeTag('/friends'), ', ', codeTag('/join'), ' and ', codeTag('/refresh'),
+				'. Type a few letters to narrow them down; ', codeTag('Esc'), ' closes.')));
 
 		let recKey = null, recCards = [], chipKey = null, chipEls = [], noteKey = null;
 
@@ -1768,7 +2390,14 @@
 		}
 
 		const io = new IntersectionObserver(entries => {
-			if (entries.some(e => e.isIntersecting)) renderMore(12);
+			if (!entries.some(e => e.isIntersecting)) return;
+			renderMore(12);
+			// Re-arm: if the sentinel is still in range after this batch, the observer only
+			// reports changes, so observing again makes it fire for the next batch.
+			if (rendered < list.length) {
+				io.unobserve(sentinel);
+				io.observe(sentinel);
+			}
 		}, { root: el, rootMargin: '0px 0px 600px 0px' });
 		io.observe(sentinel);
 
@@ -1893,11 +2522,13 @@
 		join.disabled = full;
 		join.addEventListener('click', () => joinServer(server.id, code));
 
-		const card = h('article', { class: 'br-card br-shine' },
+		const friends = friendsInServer(server.id);
+		const card = h('article', { class: 'br-card br-shine' + (friends.length ? ' is-friend' : '') },
 			h('div', { class: 'br-card-top' },
 				h('span', { class: 'br-players' }, icon('people'), fmt(playing), h('small', { text: '/ ' + (max || '?') })),
 				h('span', { class: 'br-fps', text: server.fps ? Math.round(server.fps) + ' fps' : '' })),
 			h('div', { class: 'br-cap' }, fill),
+			friends.length ? h('div', { class: 'br-card-friends' }, friendAvatars(friends, 3), h('span', { class: 'br-friend-names', text: 'with ' + friendNames(friends) })) : null,
 			avatars,
 			h('div', { class: 'br-meta' },
 				h('span', { class: 'br-k', text: 'Region' }),
@@ -1914,28 +2545,13 @@
 
 	// ----- Commands -----------------------------------------------------------------
 
-	const COMMANDS = [
-		['help', 'Show this list'],
-		['list', 'Every region with its server count'],
-		['refresh', 'Scan all servers again'],
-		['home', 'Back to the overview'],
-		['version', 'Show the installed version'],
-		['credits', 'Who made BloxRegion'],
-		['contacts', 'Contact links'],
-		['exit', 'Close BloxRegion']
-	];
-
 	function resolveCommand(raw) {
-		const t = String(raw || '').trim().toLowerCase();
+		// Commands work with or without the leading slash.
+		const t = String(raw || '').trim().replace(/^\/+/, '').trim().toLowerCase();
 		if (!t) return null;
-		if (t === 'help' || t === '?') return { kind: 'help' };
-		if (t === 'home' || t === 'clear' || t === 'cls' || t === 'overview') return { kind: 'home' };
-		if (t === 'list' || t === 'ls') return { kind: 'list' };
-		if (t === 'refresh' || t === 'reload') return { kind: 'refresh' };
-		if (t === 'credits') return { kind: 'credits' };
-		if (t === 'contacts' || t === 'contact') return { kind: 'contacts' };
-		if (t === 'exit' || t === 'quit' || t === 'close') return { kind: 'exit' };
-		if (t === 'version' || t === 'ver' || t === '-v' || t === '--version') return { kind: 'version' };
+		if (t === '-v' || t === '--version') return { kind: 'version' };
+		const command = SLASH_COMMANDS.find(c => c.cmd === t || (c.alias || []).includes(t));
+		if (command) return { kind: command.cmd };
 		const continents = { na: 'North America', sa: 'South America', eu: 'Europe', oc: 'Oceania' };
 		for (const c of CONTINENTS) continents[c.toLowerCase()] = c;
 		if (continents[t]) return { kind: 'continent', value: continents[t] };
@@ -1953,11 +2569,28 @@
 		switch (cmd.kind) {
 			case 'help':
 				showConsole(raw, [
-					...COMMANDS.map(([c, d]) => [{ k: c }, d]),
-					[{ k: '<region>' }, 'singapore, tokyo, us-ca … opens that region'],
-					[{ k: '<continent>' }, 'asia, europe, north america … shows every server there']
+					...SLASH_COMMANDS.map(c => [{ k: '/' + c.cmd }, c.desc]),
+					[{ k: '/<region>' }, 'singapore, tokyo, us-ca … opens that region'],
+					[{ k: '/<continent>' }, 'asia, europe, north america … shows every server there']
 				]);
 				break;
+			case 'friends':
+				hideConsole();
+				selectFriends();
+				break;
+			case 'nearest': {
+				hideConsole();
+				const code = nearestCodes(1)[0];
+				if (code) selectRegion(code);
+				else toast('Still working out where you are…', 'info');
+				break;
+			}
+			case 'join': {
+				const code = nearestCodes(6).find(c => (S.counts[c] || 0) > 0);
+				if (code) joinBest(code);
+				else toast(SCAN.active ? 'Still looking for servers near you…' : 'No servers found near you', 'info');
+				break;
+			}
 			case 'version':
 				showConsole(raw, [[{ k: 'BloxRegion' }, { b: 'v' + VERSION }, ' — free and open source']]);
 				break;
@@ -1998,7 +2631,7 @@
 				showContinent(cmd.value);
 				break;
 			default:
-				showConsole(raw, [['No region or command matches “' + raw + '”. Type ', { b: 'help' }, ' to see what you can do.']]);
+				showConsole(raw, [['No region or command matches “' + raw + '”. Type ', { b: '/' }, ' to see every command.']]);
 		}
 	}
 
@@ -2071,10 +2704,11 @@
 		watchPage();
 		window.addEventListener('pagehide', saveCaches);
 		getCsrf();
-		loadUser();
+		userReady = loadUser();
 		await loadCaches();
 		ensureUserLoc();
 		startScan();
+		userReady.then(user => { if (user) loadFriends(); });
 	}
 
 	try {
