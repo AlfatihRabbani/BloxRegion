@@ -46,6 +46,11 @@
   `/friends`, `/nearest` (open the closest region) and `/join` (join the best
   server near you). Plain text still filters the region list. Click a
   continent's header to see all of its servers.
+- **Update notices** — BloxRegion now tells you when a new version is out:
+  a dot on the globe button, an Update badge in the sidebar, and a card on the
+  Overview with what's new. Firefox installs updates from Firefox Add-ons on its
+  own; if one arrives while BloxRegion is open, it waits and offers **Restart to
+  update** instead of interrupting you. `/update` checks right away.
 - BloxRegion briefly pauses scanning when you press Play or Join, so it never
   competes with Roblox while the game launches.
 - Clear messages when you're signed out of Roblox or a security token can't be

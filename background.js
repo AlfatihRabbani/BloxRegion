@@ -133,7 +133,123 @@ async function brLookupSelfGeo() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Updates. New versions are published to GitHub and then to Firefox Add-ons;
+// Firefox installs them. This only reads version info (never code), so users
+// can see what's new and apply a downloaded update at a good moment.
+// ---------------------------------------------------------------------------
+
+const BR_REPO = 'AlfatihRabbani/BloxRegion';
+const BR_AMO_ID = 'fatihmuhammad849@gmail.com';
+const BR_AMO_PAGE = 'https://addons.mozilla.org/firefox/addon/bloxregion/';
+const BR_UPDATE_TTL = 6 * 60 * 60 * 1000;
+
+function brCompareVersions(a, b) {
+  const pa = String(a || '0').split('.').map(n => parseInt(n, 10) || 0);
+  const pb = String(b || '0').split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
+async function brFetchJson(url) {
+  const res = await fetch(url, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+  if (!res.ok) throw new Error(url + ' ' + res.status);
+  return res.json();
+}
+
+async function brCheckForUpdate(force) {
+  const installed = chrome.runtime.getManifest().version;
+  const stored = await chrome.storage.local.get(['brUpdateInfo', 'brPendingUpdate']);
+  let info = stored.brUpdateInfo;
+  const fresh = info && info.installed === installed && Date.now() - info.checkedAt < BR_UPDATE_TTL;
+  if (force || !fresh) {
+    const next = { installed, latest: null, notes: '', releaseUrl: `https://github.com/${BR_REPO}/releases`, amoVersion: null, amoUrl: BR_AMO_PAGE, checkedAt: Date.now() };
+    try {
+      const rel = await brFetchJson(`https://api.github.com/repos/${BR_REPO}/releases/latest`);
+      next.latest = String(rel.tag_name || '').replace(/^v/i, '') || null;
+      next.notes = String(rel.body || '').slice(0, 4000);
+      if (rel.html_url) next.releaseUrl = rel.html_url;
+    } catch (e) {
+      // Keep the last known release if GitHub is unreachable or rate-limited.
+      if (info && info.latest) Object.assign(next, { latest: info.latest, notes: info.notes, releaseUrl: info.releaseUrl });
+    }
+    try {
+      const amo = await brFetchJson(`https://addons.mozilla.org/api/v5/addons/addon/${encodeURIComponent(BR_AMO_ID)}/`);
+      next.amoVersion = (amo.current_version && amo.current_version.version) || null;
+      if (amo.url) next.amoUrl = amo.url;
+    } catch (e) {
+      if (info) next.amoVersion = info.amoVersion;
+    }
+    info = next;
+    await chrome.storage.local.set({ brUpdateInfo: info });
+  }
+  let pending = stored.brPendingUpdate || null;
+  if (pending && brCompareVersions(pending, installed) <= 0) {
+    pending = null;
+    await chrome.storage.local.remove('brPendingUpdate');
+  }
+  // ready: Firefox already downloaded it · store: live on Firefox Add-ons · review: on GitHub, awaiting Mozilla
+  let state = 'current';
+  if (pending) state = 'ready';
+  else if (info.amoVersion && brCompareVersions(info.amoVersion, installed) > 0) state = 'store';
+  else if (info.latest && brCompareVersions(info.latest, installed) > 0) state = 'review';
+  const target = state === 'ready' ? pending : state === 'store' ? info.amoVersion : state === 'review' ? info.latest : installed;
+  return { ...info, installed, state, target };
+}
+
+// Is a BloxRegion window open in any tab? (Applying an update reloads the extension.)
+async function brAnyWindowOpen() {
+  let tabs = [];
+  try { tabs = await chrome.tabs.query({}); } catch (e) { return false; }
+  const answers = await Promise.all(tabs.map(tab => Promise.race([
+    chrome.tabs.sendMessage(tab.id, { action: 'brWindowOpen?' }).then(r => !!(r && r.open)).catch(() => false),
+    new Promise(resolve => setTimeout(() => resolve(false), 400))
+  ])));
+  return answers.some(Boolean);
+}
+
+async function brBroadcast(message) {
+  let tabs = [];
+  try { tabs = await chrome.tabs.query({}); } catch (e) { return; }
+  for (const tab of tabs) chrome.tabs.sendMessage(tab.id, message).catch(() => {});
+}
+
+// Firefox found and downloaded a new version. Install it straight away unless someone is
+// using BloxRegion right now; then let them restart it from the window.
+chrome.runtime.onUpdateAvailable.addListener(async (details) => {
+  if (!(await brAnyWindowOpen())) {
+    chrome.runtime.reload();
+    return;
+  }
+  await chrome.storage.local.set({ brPendingUpdate: details.version });
+  brBroadcast({ action: 'brUpdateReady', version: details.version });
+});
+
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
+
+  if (message.action === 'brUpdateInfo') {
+    brCheckForUpdate(!!message.force)
+      .then(info => sendResponse({ success: true, info }))
+      .catch(() => sendResponse({ success: false }));
+    return true;
+  }
+
+  if (message.action === 'brApplyUpdate') {
+    sendResponse({ success: true });
+    setTimeout(() => chrome.runtime.reload(), 150);
+    return false;
+  }
+
+  if (message.action === 'brWindowClosed') {
+    (async () => {
+      const { brPendingUpdate } = await chrome.storage.local.get('brPendingUpdate');
+      if (brPendingUpdate && !(await brAnyWindowOpen())) chrome.runtime.reload();
+    })();
+    return false;
+  }
 
   if (message.action === 'brSelfGeo') {
     brLookupSelfGeo().then(geo => sendResponse(geo ? { success: true, la: geo.la, lo: geo.lo } : { success: false }));

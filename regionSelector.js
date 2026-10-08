@@ -256,7 +256,8 @@
 		info: [['circle', { cx: 12, cy: 12, r: 9 }], ['path', { d: 'M12 11v5.5M12 7.8h.01' }]],
 		link: [['path', { d: 'M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1.2 1.2' }], ['path', { d: 'M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1.2-1.2' }]],
 		sparkle: [['path', { d: 'M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z' }], ['path', { d: 'M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z' }]],
-		warn: [['path', { d: 'M10.3 4.6L3.2 17.2a2 2 0 0 0 1.7 3h14.2a2 2 0 0 0 1.7-3L13.7 4.6a2 2 0 0 0-3.4 0z' }], ['path', { d: 'M12 9.5v4.5M12 17h.01' }]]
+		warn: [['path', { d: 'M10.3 4.6L3.2 17.2a2 2 0 0 0 1.7 3h14.2a2 2 0 0 0 1.7-3L13.7 4.6a2 2 0 0 0-3.4 0z' }], ['path', { d: 'M12 9.5v4.5M12 17h.01' }]],
+		download: [['path', { d: 'M12 4v11' }], ['path', { d: 'M7.5 10.5L12 15l4.5-4.5' }], ['path', { d: 'M5 19.5h14' }]]
 	};
 	const FILLED_ICONS = new Set(['play', 'star']);
 
@@ -518,7 +519,8 @@
 	// ---------------------------------------------------------------------------
 
 	async function loadCaches() {
-		const v = await store.get([JOB_KEY, 'brJobIndex', 'brSubnets', 'brUserLoc']);
+		const v = await store.get([JOB_KEY, 'brJobIndex', 'brSubnets', 'brUserLoc', 'brUpdateDismissed']);
+		UPD.dismissed = v.brUpdateDismissed || null;
 		const now = Date.now();
 		const jobs = v[JOB_KEY];
 		if (jobs && typeof jobs === 'object') {
@@ -1180,6 +1182,115 @@
 	}
 
 	// ---------------------------------------------------------------------------
+	// Updates: new versions ship through Firefox Add-ons; this shows what's coming
+	// ---------------------------------------------------------------------------
+
+	const UPD = { info: null, dismissed: null, applying: false };
+
+	// current · review (on GitHub, awaiting Mozilla) · store (live on Firefox Add-ons) · ready (downloaded)
+	function updateState() {
+		return UPD.info && UPD.info.state ? UPD.info.state : 'current';
+	}
+
+	async function loadUpdateInfo(force) {
+		const res = await sendMsg({ action: 'brUpdateInfo', force: !!force });
+		if (res && res.success && res.info) {
+			UPD.info = res.info;
+			updateLauncher();
+			scheduleUpdate();
+		}
+		return UPD.info;
+	}
+
+	// Short highlights from the release notes: the bold titles of its bullet points.
+	function releaseHighlights(markdown, max) {
+		const out = [];
+		for (const line of String(markdown || '').split(/\r?\n/)) {
+			const m = line.match(/^\s*[-*•]\s+(.+)$/);
+			if (!m) continue;
+			const bold = m[1].match(/\*\*(.+?)\*\*/);
+			let text = (bold ? bold[1] : m[1].split(/\s[—–]\s|:\s/)[0]).replace(/[*_`]/g, '').trim();
+			if (text.length > 48) text = text.slice(0, 46).trim() + '…';
+			if (text) out.push(text);
+			if (out.length >= max) break;
+		}
+		return out;
+	}
+
+	const UPDATE_COPY = {
+		ready: v => ({ title: `BloxRegion ${v} is ready`, sub: 'Firefox has already downloaded it. Restart BloxRegion to switch over; the page reloads on the new version.' }),
+		store: v => ({ title: `BloxRegion ${v} is available`, sub: 'Firefox installs add-on updates on its own within a day, or you can get it right now from Firefox Add-ons.' }),
+		review: v => ({ title: `BloxRegion ${v} is on its way`, sub: 'It’s waiting for Mozilla’s review. Firefox installs it automatically once it’s approved; nothing to do on your side.' })
+	};
+
+	function applyUpdate() {
+		if (UPD.applying) return;
+		UPD.applying = true;
+		toast('Updating BloxRegion…', 'download');
+		sendMsg({ action: 'brApplyUpdate' });
+		// The extension restarts on the new version; reload so this page runs it too.
+		setTimeout(() => location.reload(), 1200);
+	}
+
+	function updateLines() {
+		const info = UPD.info;
+		if (!info) return [['Couldn’t reach GitHub or Firefox Add-ons. Try again in a moment.']];
+		const state = updateState();
+		const lines = [[{ k: 'Installed' }, { b: 'v' + info.installed }]];
+		if (info.latest) lines.push([{ k: 'Latest release' }, { b: 'v' + info.latest }, ' on GitHub']);
+		if (info.amoVersion) lines.push([{ k: 'Firefox Add-ons' }, { b: 'v' + info.amoVersion }]);
+		lines.push([{ k: 'Status' }, state === 'current' ? 'You’re on the latest version.' : UPDATE_COPY[state](info.target).sub]);
+		const highlights = state === 'current' ? [] : releaseHighlights(info.notes, 5);
+		if (highlights.length) lines.push([{ k: 'What’s new' }, highlights.join(' · ')]);
+		lines.push([{ k: 'Links' }, { a: 'Release notes', href: info.releaseUrl }, ' · ', { a: 'Firefox Add-ons', href: info.amoUrl }]);
+		return lines;
+	}
+
+	// The card at the top of the Overview when a newer version exists.
+	function updateCard() {
+		const el = h('div', { class: 'br-update is-hidden', role: 'status' });
+		let key = null;
+		function render() {
+			const state = updateState();
+			const info = UPD.info;
+			const next = state === 'current' || UPD.dismissed === (info.target + ':' + state) ? '' : state + ':' + info.target;
+			if (next === key) return;
+			key = next;
+			el.textContent = '';
+			el.classList.toggle('is-hidden', !next);
+			if (!next) return;
+			const copy = UPDATE_COPY[state](info.target);
+			const actions = h('div', { class: 'br-actions' });
+			if (state === 'ready') {
+				actions.append(h('button', { type: 'button', class: 'br-btn is-primary', onclick: applyUpdate }, icon('download'), 'Restart to update'));
+			} else if (state === 'store') {
+				actions.append(h('a', { class: 'br-btn is-primary', href: info.amoUrl, target: '_blank', rel: 'noopener noreferrer' }, icon('download'), 'Get it now'));
+			}
+			actions.append(h('a', { class: 'br-btn', href: info.releaseUrl, target: '_blank', rel: 'noopener noreferrer', text: 'What’s new' }));
+			if (state !== 'ready') {
+				actions.append(h('button', {
+					type: 'button', class: 'br-btn is-quiet', text: 'Later',
+					onclick: () => {
+						UPD.dismissed = info.target + ':' + state;
+						store.set({ brUpdateDismissed: UPD.dismissed });
+						render();
+					}
+				}));
+			}
+			const tags = releaseHighlights(info.notes, 4).map(t => h('span', { text: t }));
+			el.append(
+				h('div', { class: 'br-update-icon' }, icon('download')),
+				h('div', { class: 'br-update-body' },
+					h('b', { text: copy.title }),
+					h('p', { text: copy.sub }),
+					tags.length ? h('div', { class: 'br-update-tags' }, tags) : null,
+					actions));
+			restartAnimation(el, 'is-in');
+		}
+		return { el, render };
+	}
+
+	// ---------------------------------------------------------------------------
 	// Joining
 	// ---------------------------------------------------------------------------
 
@@ -1233,7 +1344,7 @@
 		ring.appendChild(svgEl('circle', { class: 'br-ring-track', cx: 18, cy: 18, r: 16 }));
 		launchArc = svgEl('circle', { class: 'br-ring-arc', cx: 18, cy: 18, r: 16, 'stroke-dasharray': RING_LEN.toFixed(2), 'stroke-dashoffset': RING_LEN.toFixed(2) });
 		ring.appendChild(launchArc);
-		btn.append(h('span', { class: 'br-launch-glyph' }, icon('globe'), ring));
+		btn.append(h('span', { class: 'br-launch-glyph' }, icon('globe'), ring), h('span', { class: 'br-launch-badge', 'aria-hidden': 'true' }));
 		btn.addEventListener('click', e => {
 			e.preventDefault();
 			e.stopPropagation();
@@ -1273,6 +1384,9 @@
 	function updateLauncher() {
 		const btn = document.getElementById('br-launch');
 		if (!btn) return;
+		const update = updateState();
+		btn.classList.toggle('has-update', update !== 'current');
+		btn.title = update !== 'current' ? 'BloxRegion — version ' + UPD.info.target + ' is available' : 'BloxRegion — choose a server region';
 		btn.classList.toggle('is-scanning', SCAN.active && !S.authError);
 		if (launchArc) launchArc.setAttribute('stroke-dashoffset', (RING_LEN * (1 - scanProgress())).toFixed(2));
 	}
@@ -1346,6 +1460,7 @@
 		showView(overviewView(), false);
 		runUpdate();
 		loadFriends();
+		loadUpdateInfo(false);
 		requestAnimationFrame(() => requestAnimationFrame(() => root.classList.add('is-open')));
 		setTimeout(() => { if (UI.input) UI.input.focus({ preventScroll: true }); }, 180);
 	}
@@ -1360,6 +1475,8 @@
 		setTimeout(() => {
 			if (UI.view && UI.view.destroy) UI.view.destroy();
 			root.remove();
+			// A downloaded update waits until the window closes.
+			sendMsg({ action: 'brWindowClosed' });
 			document.body.style.overflow = prevBodyOverflow;
 			Object.assign(UI, { root: null, closing: false, view: null, input: null, sideList: null, pill: null, consoleHost: null, toastEl: null });
 			UI.rows.clear();
@@ -1453,7 +1570,7 @@
 			h('div', { class: 'br-side-head' },
 				h('div', { class: 'br-appicon' }, icon('globe')),
 				h('div', { class: 'br-app-name' }, h('div', { class: 'br-app-title', text: 'BloxRegion' }), h('div', { class: 'br-app-game', text: gameName() })),
-				h('span', { class: 'br-ver', text: 'v' + VERSION })),
+				UI.verPill = h('button', { type: 'button', class: 'br-ver', text: 'v' + VERSION, onclick: () => { if (updateState() !== 'current') runCommand('/update'); } })),
 			h('div', { class: 'br-search-wrap' },
 				h('label', { class: 'br-search' }, icon('search'), input, h('span', { class: 'br-kbd', text: '/' })),
 				suggest),
@@ -1485,6 +1602,7 @@
 		{ cmd: 'home', icon: 'house', desc: 'Back to the overview', alias: ['overview', 'clear', 'cls'] },
 		{ cmd: 'list', icon: 'layers', desc: 'Every region with its server count', alias: ['ls'] },
 		{ cmd: 'version', icon: 'bolt', desc: 'Show the installed version', alias: ['ver'] },
+		{ cmd: 'update', icon: 'download', desc: 'Check for a new version', alias: ['upgrade', 'updates'] },
 		{ cmd: 'credits', icon: 'sparkle', desc: 'Who made BloxRegion' },
 		{ cmd: 'contacts', icon: 'link', desc: 'Contact links', alias: ['contact'] },
 		{ cmd: 'exit', icon: 'close', desc: 'Close BloxRegion', alias: ['quit', 'close'] }
@@ -1838,6 +1956,12 @@
 	}
 
 	function updateFoot() {
+		if (UI.verPill) {
+			const state = updateState();
+			setText(UI.verPill, state === 'current' ? 'v' + VERSION : 'Update');
+			UI.verPill.classList.toggle('is-update', state !== 'current');
+			UI.verPill.title = state === 'current' ? 'You’re on the latest version' : 'Version ' + UPD.info.target + ' is available';
+		}
 		const f = UI.foot;
 		if (!f) return;
 		if (S.user) {
@@ -2228,13 +2352,14 @@
 		const hero = h('div', { class: 'br-hero' }, greet,
 			h('p', { text: 'Regions are ordered by distance from you. Browse a region to see its servers, or jump straight into the best one.' }));
 		const note = h('div', { class: 'br-note is-warn is-hidden' });
+		const updateBox = updateCard();
 		const tServers = statTile('server', 'Servers indexed');
 		const tRegions = statTile('globe', 'Regions online');
 		const tScan = statTile('bolt', 'Scan');
 		const recNote = h('span');
 		const recGrid = h('div', { class: 'br-rec-grid' });
 		const chips = h('div', { class: 'br-chips' });
-		el.append(hero, note,
+		el.append(hero, updateBox.el, note,
 			h('div', { class: 'br-stats' }, tServers.el, tRegions.el, tScan.el),
 			h('div', { class: 'br-h2' }, h('h2', { text: 'Nearest to you' }), recNote), recGrid,
 			h('div', { class: 'br-h2' }, h('h2', { text: 'Continents' })), chips,
@@ -2278,6 +2403,7 @@
 		}
 
 		function update() {
+			updateBox.render();
 			setText(greet, greeting());
 			setTitle(null, 'Overview', gameName());
 
@@ -2591,8 +2717,18 @@
 				else toast(SCAN.active ? 'Still looking for servers near you…' : 'No servers found near you', 'info');
 				break;
 			}
+			case 'update':
+				showConsole(raw, [['Checking for updates…']]);
+				loadUpdateInfo(true).then(() => {
+					if (UI.consoleHost && UI.consoleHost.firstChild) showConsole(raw, updateLines());
+					if (updateState() !== 'current' && UI.root) selectOverview();
+				});
+				break;
 			case 'version':
-				showConsole(raw, [[{ k: 'BloxRegion' }, { b: 'v' + VERSION }, ' — free and open source']]);
+				showConsole(raw, [
+					[{ k: 'BloxRegion' }, { b: 'v' + VERSION }, ' — free and open source'],
+					...(updateState() !== 'current' ? [[{ k: 'Newer version' }, { b: 'v' + UPD.info.target }, ' — type ', { b: '/update' }, ' for details']] : [])
+				]);
 				break;
 			case 'credits':
 				showConsole(raw, [[{ k: 'UI Designer' }, 'Kanezama'], [{ k: 'Main Coder' }, { a: 'AlfatihRabbani', href: 'https://github.com/AlfatihRabbani' }]]);
@@ -2700,7 +2836,27 @@
 	// Boot
 	// ---------------------------------------------------------------------------
 
+	// After an update Firefox can inject the new version into open tabs; drop the old instance's UI.
+	function removeStaleUi() {
+		const staleRoot = document.getElementById('br-root');
+		if (staleRoot) {
+			staleRoot.remove();
+			document.body.style.overflow = '';
+		}
+		const staleLaunch = document.getElementById('br-launch');
+		if (staleLaunch) staleLaunch.remove();
+	}
+
+	try {
+		chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+			if (!msg) return;
+			if (msg.action === 'brWindowOpen?') sendResponse({ open: !!UI.root });
+			else if (msg.action === 'brUpdateReady') loadUpdateInfo(false);
+		});
+	} catch (e) {}
+
 	async function boot() {
+		removeStaleUi();
 		watchPage();
 		window.addEventListener('pagehide', saveCaches);
 		getCsrf();
@@ -2709,6 +2865,7 @@
 		ensureUserLoc();
 		startScan();
 		userReady.then(user => { if (user) loadFriends(); });
+		loadUpdateInfo(false);
 	}
 
 	try {

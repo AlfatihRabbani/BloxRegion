@@ -1864,6 +1864,117 @@
 	color: var(--br-text-3);
 }
 
+/* ---------- Updates ------------------------------------------------------ */
+
+#br-launch .br-launch-badge {
+	position: absolute;
+	top: 8px;
+	right: 8px;
+	width: 9px;
+	height: 9px;
+	border-radius: 50%;
+	background: var(--br-accent);
+	box-shadow: 0 0 0 2px var(--br-launch-bg-hover), 0 0 10px var(--br-accent);
+	opacity: 0;
+	transform: scale(0.4);
+	transition: opacity 260ms ease, transform var(--br-bouncy-dur) var(--br-bouncy);
+}
+#br-launch.has-update .br-launch-badge {
+	opacity: 1;
+	transform: none;
+}
+#br-root button.br-ver {
+	cursor: default;
+	transition: background-color 200ms ease, color 200ms ease, transform var(--br-bouncy-dur) var(--br-bouncy);
+}
+#br-root button.br-ver.is-update {
+	background: var(--br-accent);
+	color: var(--br-on-accent);
+	cursor: pointer;
+	box-shadow: 0 4px 12px -4px var(--br-accent);
+}
+#br-root button.br-ver.is-update:hover {
+	filter: brightness(1.08);
+}
+#br-root button.br-ver.is-update:active {
+	transform: scale(0.94);
+}
+#br-root .br-update {
+	position: relative;
+	display: flex;
+	align-items: flex-start;
+	gap: 14px;
+	margin-bottom: 14px;
+	padding: 16px 18px;
+	border-radius: 20px;
+	background:
+		linear-gradient(135deg, color-mix(in srgb, var(--br-accent) 22%, transparent), color-mix(in srgb, var(--br-accent-2) 14%, transparent)),
+		var(--br-panel);
+	box-shadow: inset 0 1px 0 var(--br-hi-soft), inset 0 0 0 1px color-mix(in srgb, var(--br-accent) 40%, transparent);
+}
+#br-root .br-update.is-in {
+	animation: br-card-in 620ms var(--br-ease-out) both;
+}
+#br-root .br-update-icon {
+	display: grid;
+	place-items: center;
+	width: 38px;
+	height: 38px;
+	border-radius: 12px;
+	background: linear-gradient(160deg, #3d9bff 0%, var(--br-accent) 45%, var(--br-accent-2) 100%);
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45), 0 6px 14px -6px var(--br-accent);
+	color: #fff;
+	flex: none;
+}
+#br-root .br-update-icon svg.br-icon {
+	width: 19px;
+	height: 19px;
+	stroke-width: 2;
+}
+#br-root .br-update-body {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-width: 0;
+	flex: 1;
+}
+#br-root .br-update-body b {
+	font: 650 16px/1.25 var(--br-font-display);
+	letter-spacing: -0.015em;
+	color: var(--br-text);
+}
+#br-root .br-update-body p {
+	font-size: 13px;
+	line-height: 1.45;
+	color: var(--br-text-2);
+}
+#br-root .br-update-tags {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-top: 2px;
+}
+#br-root .br-update-tags span {
+	padding: 4px 10px;
+	border-radius: 999px;
+	background: var(--br-fill);
+	color: var(--br-text);
+	font: 550 12px/1.2 var(--br-font);
+}
+#br-root .br-update .br-actions {
+	margin-top: 6px;
+	flex-wrap: wrap;
+}
+#br-root .br-btn.is-quiet {
+	background: transparent;
+	box-shadow: none;
+	color: var(--br-text-2);
+}
+#br-root .br-btn.is-quiet:hover {
+	background: var(--br-fill);
+	color: var(--br-text);
+}
+
 /* ---------- Responsive --------------------------------------------------- */
 
 @media (max-width: 980px) {

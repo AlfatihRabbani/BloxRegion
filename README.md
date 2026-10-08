@@ -60,6 +60,29 @@ Press <kbd>/</kbd> anywhere in the window (or type `/` in the search field) to o
 | `/<region code>` | e.g. `/sg`, `/us-ca`, `/de`: open that region |
 | `/<continent>` | `/asia`, `/europe`, `/north america`: show every server there |
 
+## Updates
+
+BloxRegion checks GitHub and Firefox Add-ons every few hours. When there's a newer version, the globe button gets a blue dot, the sidebar shows **Update**, and the Overview shows what's new.
+
+- **Live on Firefox Add-ons:** Firefox installs it on its own, usually within a day. **Get it now** opens the listing if you don't want to wait.
+- **Downloaded while BloxRegion is open:** Firefox holds it until you click **Restart to update** or close the window.
+- **Still in Mozilla's review:** nothing to do. It installs automatically once approved.
+
+Type `/update` to check right away.
+
+## Releasing a new version
+
+Publishing a GitHub release submits it to Firefox Add-ons automatically, through the [Publish to Firefox Add-ons](.github/workflows/publish-firefox.yml) workflow.
+
+1. **One-time setup:** create an API key at [addons.mozilla.org → API Keys](https://addons.mozilla.org/developers/addon/api/key/). Add both values as repository secrets under Settings → Secrets and variables → Actions:
+   - `AMO_JWT_ISSUER`: the JWT issuer
+   - `AMO_JWT_SECRET`: the JWT secret
+2. Bump `version` in `manifest.json`, add a `CHANGELOG.md` entry, and push.
+3. Publish a GitHub release tagged `v<version>` (for example `v2.1`). The release text becomes the Firefox Add-ons release notes.
+4. The workflow checks the tag matches `manifest.json`, builds and lints the add-on, submits it to Firefox Add-ons, and attaches the zip to the release. Once Mozilla approves it, every user gets the update.
+
+To submit an existing release again, open the Actions tab, select **Publish to Firefox Add-ons**, click **Run workflow**, and enter the tag.
+
 ## Requirements
 
 - **Firefox 140+** (Android 142+).
@@ -100,6 +123,8 @@ Press <kbd>/</kbd> anywhere in the window (or type `/` in the search field) to o
 ├── background.js        # dNR rules, geo lookups, game launcher
 ├── regionSelector.js    # scanner, launcher button and window
 ├── bloxregion.css       # Liquid Glass styles
+├── .github/workflows/
+│   └── publish-firefox.yml  # GitHub release → Firefox Add-ons
 ├── json/
 │   ├── rules.json       # static dNR rule (UA / Origin / Referer)
 │   ├── regionRules.json # secondary dNR ruleset
