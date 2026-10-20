@@ -114,7 +114,6 @@
 		'120': ['JP', 'Tokyo', 35.6895, 139.6917],
 		'122': ['FR', 'Paris', 48.8534, 2.3488],
 		'123': ['DE', 'Frankfurt', 50.1155, 8.6842],
-		'124': ['PL', 'Warsaw', 52.2297, 21.0122],
 		'127': ['US-FL', 'Miami', 25.7743, -80.1937]
 	};
 	const REMOTE_IP_MAP = 'https://raw.githubusercontent.com/RoRegion/Storage/refs/heads/main/regionList.json';

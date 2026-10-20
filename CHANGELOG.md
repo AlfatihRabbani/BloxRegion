@@ -10,8 +10,8 @@
   right city instantly, with flags and ping estimates. Some of these are still
   rolling out on Roblox's side, so they may show few or no servers for now.
 - More of Roblox's own datacenter ranges are recognised instantly (extra blocks
-  in Los Angeles, Chicago, Atlanta, Ashburn, New York, London, Paris, Frankfurt,
-  Tokyo and Warsaw), so fewer servers need a slower lookup.
+  in Los Angeles, Chicago, Atlanta, Ashburn, New York, London, Paris, Frankfurt
+  and Tokyo), so fewer servers need a slower lookup.
 - Istanbul is grouped under Europe.
 
 ## 2.0
