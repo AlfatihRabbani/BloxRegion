@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.1
+
+- **13 new server locations** — the region finder now lists Roblox's newest
+  datacenters: Jakarta (Indonesia), Kuala Lumpur (Malaysia), Tel Aviv (Israel),
+  Istanbul (Türkiye), Athens (Greece), Warsaw (Poland), Milan (Italy), Zürich
+  (Switzerland), Cape Town (South Africa), Querétaro (Mexico), Lima (Peru),
+  Buenos Aires (Argentina) and Santiago (Chile). Servers there are placed in the
+  right city instantly, with flags and ping estimates. Some of these are still
+  rolling out on Roblox's side, so they may show few or no servers for now.
+- More of Roblox's own datacenter ranges are recognised instantly (extra blocks
+  in Los Angeles, Chicago, Atlanta, Ashburn, New York, London, Paris, Frankfurt,
+  Tokyo and Warsaw), so fewer servers need a slower lookup.
+- Istanbul is grouped under Europe.
+
 ## 2.0
 
 - **Liquid Glass redesign** — BloxRegion now opens in a frosted-glass window
