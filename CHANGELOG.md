@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.2
+
+- **Much smoother** — the window no longer uses live full-screen blur. The
+  frosted backdrop is now the game's artwork blurred once and kept still, so
+  Firefox doesn't have to redraw a heavy blur on every frame. Same look, far
+  less work for your graphics card.
+- **Real-time server lists** — while a region (or continent) is open, newly
+  scanned servers slide into the list in sorted order as they're found, with a
+  short highlight, and the cards around them glide aside. A green dot next to
+  the server count shows the list is still updating.
+- Lighter while scanning: the region list only re-measures itself when its
+  order actually changes, off-screen server cards skip rendering, the progress
+  bar and live indicator no longer repaint constantly, and the server cache is
+  written to disk less often.
+
 ## 2.1
 
 - **13 new server locations** — the region finder now lists Roblox's newest

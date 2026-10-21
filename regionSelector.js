@@ -486,7 +486,15 @@
 		el.classList.toggle('br-light', !dark);
 	}
 
+	let shineEvent = null;
 	function trackShine(e) {
+		if (!shineEvent) requestAnimationFrame(applyShine);
+		shineEvent = e;
+	}
+	function applyShine() {
+		const e = shineEvent;
+		shineEvent = null;
+		if (!e) return;
 		const target = e.target && e.target.closest && e.target.closest('.br-shine, #br-launch');
 		if (!target) return;
 		const r = target.getBoundingClientRect();
@@ -642,7 +650,7 @@
 
 	let saveTimer = 0;
 	function queueSave() {
-		if (!saveTimer) saveTimer = setTimeout(saveCaches, 3000);
+		if (!saveTimer) saveTimer = setTimeout(saveCaches, SCAN.active ? 15000 : 3000);
 	}
 	function saveCaches() {
 		clearTimeout(saveTimer);
@@ -1184,7 +1192,15 @@
 	}
 
 	// Groups friends by the server they're in: this game, other games, server hidden, or just online.
+	let friendGroupsMemo = null, friendGroupsKey = '';
 	function friendGroups() {
+		const memoKey = FRIENDS.updatedAt + ':' + FRIENDS.list.length;
+		if (friendGroupsMemo && memoKey === friendGroupsKey) return friendGroupsMemo;
+		friendGroupsKey = memoKey;
+		friendGroupsMemo = buildFriendGroups();
+		return friendGroupsMemo;
+	}
+	function buildFriendGroups() {
 		const here = new Map(), elsewhere = new Map(), hidden = [], online = [];
 		for (const f of FRIENDS.list) {
 			const p = FRIENDS.presence.get(f.id);
@@ -1434,6 +1450,7 @@
 
 	const RING_LEN = 2 * Math.PI * 16;
 	let launchArc = null;
+	let launchPct = -1;
 
 	function buildLauncher() {
 		const btn = h('button', { id: 'br-launch', type: 'button', class: 'br-scope', title: 'BloxRegion — choose a server region', 'aria-label': 'Open BloxRegion server regions' });
@@ -1487,27 +1504,43 @@
 		btn.classList.toggle('has-update', update !== 'current');
 		btn.title = update !== 'current' ? 'BloxRegion — version ' + UPD.info.target + ' is available' : 'BloxRegion — choose a server region';
 		btn.classList.toggle('is-scanning', SCAN.active && !S.authError);
-		if (launchArc) launchArc.setAttribute('stroke-dashoffset', (RING_LEN * (1 - scanProgress())).toFixed(2));
+		const pct = Math.round(scanProgress() * 100);
+		if (launchArc && pct !== launchPct) {
+			launchPct = pct;
+			launchArc.setAttribute('stroke-dashoffset', (RING_LEN * (1 - pct / 100)).toFixed(2));
+		}
 	}
 
 	function watchPage() {
 		let queued = false;
-		const check = () => {
-			queued = false;
-			ensureLauncher();
-		};
-		new MutationObserver(() => {
+		let narrowed = false;
+		const schedule = () => {
 			if (!queued) {
 				queued = true;
 				requestAnimationFrame(check);
 			}
-		}).observe(document.body, { childList: true, subtree: true });
+		};
+		const pageObserver = new MutationObserver(schedule);
+		function check() {
+			queued = false;
+			ensureLauncher();
+			// Watching all of <body> also fires for every update inside the BloxRegion window,
+			// so narrow it to the Play button's area (plus a slow safety check) once placed.
+			const host = document.querySelector('.br-launch-host');
+			if (!narrowed && host && host.parentElement) {
+				narrowed = true;
+				pageObserver.disconnect();
+				new MutationObserver(schedule).observe(host.parentElement, { childList: true, subtree: true });
+				setInterval(ensureLauncher, 2000);
+			}
+		}
+		pageObserver.observe(document.body, { childList: true, subtree: true });
 		new MutationObserver(() => {
 			const btn = document.getElementById('br-launch');
 			if (btn) applyTheme(btn);
 			if (UI.root) applyTheme(UI.root);
 		}).observe(document.body, { attributes: true, attributeFilter: ['class'] });
-		ensureLauncher();
+		check();
 	}
 
 	// ---------------------------------------------------------------------------
@@ -1536,7 +1569,20 @@
 
 		const ambient = h('div', { class: 'br-ambient', 'aria-hidden': 'true' });
 		const art = gameArt();
-		if (art) ambient.append(h('img', { class: 'br-ambient-img', alt: '', src: art, decoding: 'async' }));
+		if (art) {
+			const canvas = h('canvas', { class: 'br-ambient-art', width: '96', height: '54' });
+			const img = new Image();
+			img.addEventListener('load', () => {
+				try {
+					const ctx = canvas.getContext('2d');
+					ctx.filter = 'blur(3px) saturate(160%)';
+					ctx.drawImage(img, -8, -6, 112, 66);
+					canvas.classList.add('is-ready');
+				} catch (e) {}
+			});
+			img.src = art;
+			ambient.append(canvas);
+		}
 		ambient.append(h('div', { class: 'br-orb is-a' }), h('div', { class: 'br-orb is-b' }), h('div', { class: 'br-orb is-c' }));
 
 		const scrim = h('div', { class: 'br-scrim', onclick: closeWindow });
@@ -1549,6 +1595,7 @@
 		UI.root = root;
 		UI.closing = false;
 		UI.sideReady = false;
+		UI.layoutSig = null;
 		UI.selKey = 'overview';
 		document.body.append(root);
 		prevBodyOverflow = document.body.style.overflow;
@@ -1959,6 +2006,13 @@
 		if (!list) return;
 		const model = sidebarModel();
 		const friendCodes = friendRegionCodes();
+		const layoutSig = model.map(sec => sec.id + ':' + sec.items.map(item => item.key).join(',')).join('|');
+		if (UI.sideReady && layoutSig === UI.layoutSig) {
+			for (const row of UI.rows.values()) updateRow(row, friendCodes);
+			if (UI.pillKey !== UI.selKey) positionPill(true);
+			return;
+		}
+		UI.layoutSig = layoutSig;
 		const animate = UI.sideReady && !REDUCED_MOTION;
 		const before = new Map();
 		if (animate) {
@@ -2033,6 +2087,7 @@
 	function positionPill(animate) {
 		const pill = UI.pill;
 		if (!pill) return;
+		UI.pillKey = UI.selKey;
 		const sel = UI.selKey ? UI.rows.get(UI.selKey) : null;
 		for (const [key, row] of UI.rows) row.el.classList.toggle('is-selected', key === UI.selKey);
 		if (!sel || !sel.el.offsetParent) {
@@ -2575,20 +2630,50 @@
 		const sentinel = h('div', { class: 'br-sentinel' });
 		el.append(grid, empty, sentinel);
 
-		let list = [];
-		let known = new Set();
-		let rendered = 0;
-		const source = () => (kind === 'region' ? (S.byRegion.get(code) || []) : continentServers(name));
+		let list = [];          // every server in this view, kept sorted
+		let rendered = 0;       // list[0 … rendered) have cards, in the same order as grid.children
+		let lastInsert = 0;
+		const consumed = new Map(); // region code -> how many of S.byRegion's servers we've taken
 
-		function sortServers(arr) {
-			const keyed = arr.map(s => [s, serverPing(s), s.playing || 0, s.maxPlayers && (s.playing || 0) >= s.maxPlayers ? 1 : 0]);
-			const pingOf = v => (Number.isFinite(v) ? v : 1e9);
-			keyed.sort((a, b) => {
-				if (UI.sort === 'most') return a[3] - b[3] || b[2] - a[2] || pingOf(a[1]) - pingOf(b[1]);
-				if (UI.sort === 'fewest') return a[2] - b[2] || pingOf(a[1]) - pingOf(b[1]);
-				return pingOf(a[1]) - pingOf(b[1]) || a[3] - b[3] || b[2] - a[2];
-			});
-			return keyed.map(k => k[0]);
+		// New servers since the last call; S.byRegion lists only ever grow during a scan.
+		function takeFresh() {
+			const out = [];
+			for (const [c, arr] of S.byRegion) {
+				if (kind === 'region' ? c !== code : regionInfo(c).continent !== name) continue;
+				const n = consumed.get(c) || 0;
+				if (arr.length > n) {
+					for (let i = n; i < arr.length; i++) out.push(arr[i]);
+					consumed.set(c, arr.length);
+				}
+			}
+			return out;
+		}
+
+		const keyCache = new Map();
+		function keyOf(s) {
+			let k = keyCache.get(s.id);
+			if (!k) {
+				const ping = serverPing(s);
+				k = [Number.isFinite(ping) ? ping : 1e9, s.playing || 0, s.maxPlayers && (s.playing || 0) >= s.maxPlayers ? 1 : 0];
+				keyCache.set(s.id, k);
+			}
+			return k;
+		}
+		function compare(a, b) {
+			const A = keyOf(a), B = keyOf(b);
+			if (UI.sort === 'most') return A[2] - B[2] || B[1] - A[1] || A[0] - B[0];
+			if (UI.sort === 'fewest') return A[1] - B[1] || A[0] - B[0];
+			return A[0] - B[0] || A[2] - B[2] || B[1] - A[1];
+		}
+		// Insert after equal items so existing cards move as little as possible.
+		function insertionIndex(s) {
+			let lo = 0, hi = list.length;
+			while (lo < hi) {
+				const mid = (lo + hi) >> 1;
+				if (compare(list[mid], s) <= 0) lo = mid + 1;
+				else hi = mid;
+			}
+			return lo;
 		}
 
 		function renderMore(count) {
@@ -2602,15 +2687,67 @@
 
 		let buildGen = 0;
 		function rebuild() {
-			list = sortServers(source().slice());
-			known = new Set(list.map(s => s.id));
+			consumed.clear();
+			list = takeFresh().sort(compare);
 			rendered = 0;
+			lastInsert = performance.now();
 			grid.textContent = '';
 			// First screenful now, the rest on the next frame so the view transition never hitches.
 			renderMore(9);
 			const gen = ++buildGen;
 			requestAnimationFrame(() => {
 				if (gen === buildGen && rendered < 18) renderMore(18 - rendered);
+			});
+		}
+
+		// Cards currently on screen, with their positions (for FLIP).
+		function visibleCards() {
+			const top = el.scrollTop - 40, bottom = el.scrollTop + el.clientHeight + 40;
+			const out = [];
+			for (const card of grid.children) {
+				const y = card.offsetTop;
+				if (y > bottom) break;
+				if (y + card.offsetHeight >= top) out.push([card, card.offsetLeft, y]);
+			}
+			return out;
+		}
+
+		// Live updates: slot newly found servers into place while the view is open.
+		function insertFresh() {
+			const fresh = takeFresh();
+			if (!fresh.length) return;
+			lastInsert = performance.now();
+			const before = REDUCED_MOTION || !rendered ? [] : visibleCards();
+			const added = [];
+			for (const s of fresh) {
+				const caughtUp = rendered === list.length;
+				const at = insertionIndex(s);
+				list.splice(at, 0, s);
+				if (at < rendered || caughtUp) {
+					const card = serverCard(s, 0);
+					card.classList.add('is-fresh');
+					grid.insertBefore(card, grid.children[at] || null);
+					rendered++;
+					added.push(card);
+				}
+			}
+			if (!before.length || !added.length) return;
+			// FLIP: cards that were pushed along glide to their new spot.
+			const moved = [];
+			for (const [card, x, y] of before) {
+				const dx = x - card.offsetLeft, dy = y - card.offsetTop;
+				if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
+				card.style.transition = 'none';
+				card.style.transform = `translate(${dx}px, ${dy}px)`;
+				moved.push(card);
+			}
+			if (!moved.length) return;
+			void grid.offsetHeight;
+			requestAnimationFrame(() => {
+				for (const card of moved) {
+					card.style.transition = '';
+					card.style.transform = '';
+				}
 			});
 		}
 
@@ -2627,26 +2764,15 @@
 		io.observe(sentinel);
 
 		function update(first) {
-			if (first) {
-				rebuild();
-			} else {
-				const src = source();
-				if (src.length !== known.size) {
-					const fresh = src.filter(s => !known.has(s.id));
-					const caughtUp = rendered >= list.length;
-					for (const s of fresh) {
-						known.add(s.id);
-						list.push(s);
-					}
-					if (caughtUp && fresh.length) renderMore(fresh.length);
-				}
-			}
+			if (first) rebuild();
+			// Batch arrivals (at most ~1.6 times a second) so the grid stays calm during a busy scan.
+			else if (!list.length || performance.now() - lastInsert > 600) insertFresh();
 
 			const total = list.length;
 			empty.classList.toggle('is-hidden', total > 0);
 			if (!total) {
-				emptyTitle.textContent = SCAN.active ? 'Looking for servers…' : 'No servers here right now';
-				emptySub.textContent = SCAN.active ? 'New servers appear here the moment they’re found.' : 'Try another region, or refresh to scan again.';
+				setText(emptyTitle, SCAN.active ? 'Looking for servers…' : 'No servers here right now');
+				setText(emptySub, SCAN.active ? 'New servers appear here the moment they’re found.' : 'Try another region, or refresh to scan again.');
 			}
 
 			if (kind === 'region') {
@@ -2655,9 +2781,11 @@
 				if (Number.isFinite(ping)) parts.push('~' + ping + ' ms');
 				setTitle(code, regionTitle(code), parts.join(' · '));
 			} else {
-				const regions = [...S.byRegion.keys()].filter(c => regionInfo(c).continent === name).length;
+				let regions = 0;
+				for (const c of S.byRegion.keys()) if (regionInfo(c).continent === name) regions++;
 				setTitle(null, name, `${fmt(total)} servers across ${regions} ${regions === 1 ? 'region' : 'regions'}`);
 			}
+			UI.subtitle.classList.toggle('is-live', SCAN.active && !S.authError);
 		}
 
 		return {
@@ -2669,11 +2797,15 @@
 			reset() {
 				buildGen++;
 				list = [];
-				known = new Set();
 				rendered = 0;
+				consumed.clear();
+				keyCache.clear();
 				grid.textContent = '';
 			},
-			destroy() { io.disconnect(); }
+			destroy() {
+				io.disconnect();
+				UI.subtitle.classList.remove('is-live');
+			}
 		};
 	}
 
@@ -2917,7 +3049,7 @@
 	let lastUpdate = 0;
 	function scheduleUpdate() {
 		if (updateTimer) return;
-		const wait = Math.max(0, 140 - (performance.now() - lastUpdate));
+		const wait = Math.max(0, 200 - (performance.now() - lastUpdate));
 		updateTimer = setTimeout(() => requestAnimationFrame(runUpdate), wait);
 	}
 	function runUpdate() {
