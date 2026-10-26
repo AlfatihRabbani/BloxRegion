@@ -182,7 +182,7 @@
 		x: null, y: null, pivot: null, neck: 0.64, cx: 0.5,
 		target: { yaw: 0, pitch: 0, body: 0 }, cur: { yaw: 0, pitch: 0, body: 0 }, raf: 0,
 		user: null, token: 0, drawn: false,
-		gl: null, r3d: null, headAt: 0.35, lastFrame: 0, load3d: 0, shotEl: null, shotTimer: 0
+		gl: null, r3d: null, headAt: 0.35, lastFrame: 0, load3d: 0, shotEl: null, shotTimer: 0, recall: null
 	};
 
 	// ---------------------------------------------------------------------------
@@ -206,8 +206,8 @@
 		if (!V.r3d || !V.el) return;
 		try {
 			render(performance.now());
-			const { yaw, pitch } = V.cur;
-			sessionStorage.setItem(SHOT_KEY, JSON.stringify({ user: V.user ? V.user.id : null, url: V.gl.toDataURL('image/png'), yaw, pitch }));
+			const { yaw, pitch, body } = V.cur;
+			sessionStorage.setItem(SHOT_KEY, JSON.stringify({ user: V.user ? V.user.id : null, url: V.gl.toDataURL('image/png'), yaw, pitch, body, x: V.x, y: V.y }));
 		} catch (e) {}
 	}
 
@@ -276,6 +276,7 @@
 			V.shotEl = img;
 			V.cur.yaw = V.target.yaw = +shot.yaw || 0;
 			V.cur.pitch = V.target.pitch = +shot.pitch || 0;
+			V.cur.body = V.target.body = +shot.body || 0;
 		}
 		body.append(gl);
 
@@ -307,10 +308,11 @@
 
 	function unmount() {
 		if (!V.el) return;
-		if (V.r3d) V.r3d.destroy();
+		if (V.r3d) V.r3d.destroy(true);
 		V.r3d = null;
 		V.load3d++;
 		removeShot();
+		try { sessionStorage.removeItem(SHOT_KEY); } catch (e) {}
 		V.el.remove();
 		V.el = null;
 		V.token++;
@@ -426,8 +428,10 @@
 	}
 
 	// The real 3D avatar, shown over the 2D one once it and its textures have loaded:
-	// straight over a saved frame, or faded in over the bust.
-	async function load3d(user, cached, token) {
+	// straight over a saved frame, or faded in over the bust. The one kept from an earlier
+	// page (see avatar3d.js) shows at once; now and then Roblox is asked whether the avatar
+	// has changed since. `url` loads that avatar instead, fresh.
+	async function load3d(user, cached, token, url) {
 		const id = ++V.load3d;
 		const current = () => id === V.load3d && token === V.token && !!V.el;
 		const giveUp = why => {
@@ -436,16 +440,25 @@
 			removeShot();
 		};
 		const A = window.__brAvatar3d;
-		if (!A || !A.supported()) return giveUp('WebGL is not available');
-		const known = cached && cached.model && Date.now() - (cached.modelAt || 0) < MODEL_TTL ? cached.model : null;
+		if (!A || !A.supported(V.gl)) return giveUp('WebGL is not available');
+		const known = url || (cached && cached.model && Date.now() - (cached.modelAt || 0) < MODEL_TTL ? cached.model : null);
 		let loaded = null, why = '';
-		try {
-			loaded = await A.load(user.id, known);
-		} catch (e) {
-			why = e.message;
-			// A remembered link can go stale when the avatar changes; ask Roblox again.
-			if (known && current()) {
-				try { loaded = await A.load(user.id, null); } catch (e2) { why = e2.message; }
+		if (!url) {
+			// Asked for as the page started, when it's the same player (see the end of this file).
+			const early = V.recall && V.recall.user === user.id ? V.recall.kept : null;
+			V.recall = null;
+			loaded = await (early || A.recall(user.id));
+		}
+		if (!current()) return;
+		if (!loaded) {
+			try {
+				loaded = await A.load(user.id, known);
+			} catch (e) {
+				why = e.message;
+				// A remembered link can go stale when the avatar changes; ask Roblox again.
+				if (known && current()) {
+					try { loaded = await A.load(user.id, null); } catch (e2) { why = e2.message; }
+				}
 			}
 		}
 		if (!loaded) return giveUp(why);
@@ -466,17 +479,28 @@
 			renderer.destroy();
 			return;
 		}
+		if (V.r3d) V.r3d.destroy();
 		V.r3d = renderer;
 		V.headAt = loaded.model.headAt;
 		V.pivot = null;
 		renderer.onChange(kick);
 		render(performance.now());
-		V.el.classList.toggle('is-instant', !!V.shotEl);
+		V.el.classList.toggle('is-instant', !!V.shotEl || V.el.classList.contains('is-3d'));
 		V.el.classList.add('is-3d');
 		removeShot();
 		kick();
 		snapshot();
-		if (loaded.url !== known) saveUser({ model: loaded.url, modelAt: Date.now() });
+		if (!loaded.recalled) {
+			if (loaded.complete) A.remember(user.id, loaded);
+			if (loaded.url !== known) saveUser({ model: loaded.url, modelAt: Date.now() });
+		} else if (loaded.url !== known) {
+			// Kept from a while ago: is it still the player's avatar?
+			const latest = await A.modelUrl(user.id).catch(() => null);
+			if (!current() || !latest) return;
+			const now = { model: latest, modelAt: Date.now() };
+			saveUser(now);
+			if (latest !== loaded.url) load3d(user, now, token, latest);
+		}
 	}
 
 	async function showBust(url, token) {
@@ -502,11 +526,11 @@
 				V.pivot = { x: r.left + r.width * V.cx, y: r.top + r.height * V.neck * 0.62 };
 			}
 		}
-		// Minecraft's inventory model: atan of the offset. The 3D avatar turns as one; the
-		// flat one turns its head further than its body.
+		// Minecraft's inventory model: atan of the offset. The head turns (and nods) much
+		// further than the body.
 		const f = Math.atan((e.clientX - V.pivot.x) / 90);
 		const g = Math.atan((e.clientY - V.pivot.y) / 90);
-		const k = V.r3d ? [34, 10, 0] : [22, 12, 8];
+		const k = V.r3d ? [36, 16, 11] : [22, 12, 8];
 		V.target.yaw = f * k[0];
 		V.target.pitch = -g * k[1];
 		V.target.body = f * k[2];
@@ -625,7 +649,17 @@
 		});
 	} catch (e) {}
 
-	// Runs as the page starts loading, so the window is back before the page has drawn.
+	// Runs as the page starts loading, so the window is back before the page has drawn. A
+	// frame saved in this tab means it was open on the page before: it's back straight away
+	// (storage can take a while to answer while the page loads), and the kept avatar is asked
+	// for at once. Storage then confirms it's still open.
+	const shot = readShot();
+	if (shot && typeof shot.x === 'number' && typeof shot.y === 'number') {
+		if (shot.user && window.__brAvatar3d) V.recall = { user: shot.user, kept: window.__brAvatar3d.recall(shot.user) };
+		V.x = shot.x;
+		V.y = shot.y;
+		mount(false);
+	}
 	store.get([KEY]).then(v => apply(v[KEY]));
 	window.addEventListener('pagehide', snapshot);
 	document.addEventListener('visibilitychange', () => {

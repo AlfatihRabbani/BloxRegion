@@ -2,9 +2,10 @@
  * BloxRegion — 3D avatar for the ViewPort
  *
  * Loads the player's 3D avatar from Roblox (the OBJ, MTL and textures behind Roblox's
- * own 3D viewer) and draws it with a small WebGL renderer. The head is drawn on its own
- * so it can turn toward the cursor while the body turns less, like the player model in
- * Minecraft's inventory. viewport.js keeps the 2D bust if anything here fails.
+ * own 3D viewer) and draws it with a small WebGL renderer. The head turns toward the
+ * cursor while the body turns less, like the player model in Minecraft's inventory. The
+ * last avatar loaded is kept in storage, ready for the next page. viewport.js keeps the 2D
+ * bust if anything here fails.
  */
 (() => {
 	'use strict';
@@ -57,70 +58,39 @@
 
 	const warn = (...args) => console.warn('[BloxRegion] 3D avatar:', ...args);
 
-	async function cdnText(hash) {
-		for (const url of cdnUrls(hash)) {
-			try {
-				const res = await fetch(url, { credentials: 'omit' });
-				if (res.ok) return await res.text();
-			} catch (e) {}
-		}
-		throw new Error('CDN file unavailable');
-	}
-
-	// Textures come through fetch, like the OBJ and MTL. Firefox won't let an add-on upload
-	// an <img> pointed straight at the CDN to WebGL, but bytes it already fetched decode
-	// into an image (from a data: URL, which Roblox's CSP allows) that it can.
-	async function cdnTexture(hash) {
+	async function cdn(hash, read) {
 		let why = 'not found';
 		for (const url of cdnUrls(hash)) {
 			try {
 				const res = await fetch(url, { credentials: 'omit' });
-				if (!res.ok) {
-					why = 'HTTP ' + res.status;
-					continue;
-				}
-				return await decodeImage(await res.blob());
+				if (res.ok) return await read(res);
+				why = 'HTTP ' + res.status;
 			} catch (e) {
 				why = (e && e.message) || String(e);
 			}
 		}
 		throw new Error(why);
 	}
+	const cdnText = hash => cdn(hash, res => res.text());
+	// Textures are kept as their bytes: they're decoded when drawn (see decodeImage), and
+	// stored with the avatar for the next page.
+	const cdnBytes = hash => cdn(hash, res => res.arrayBuffer());
 
 	// The CDN's content types aren't always image types; name the format from its bytes.
-	async function imageType(blob) {
-		const b = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
+	function imageType(bytes) {
+		const b = new Uint8Array(bytes, 0, Math.min(12, bytes.byteLength));
 		if (b[0] === 0x89 && b[1] === 0x50) return 'image/png';
 		if (b[0] === 0xff && b[1] === 0xd8) return 'image/jpeg';
 		if (b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return 'image/webp';
 		if (b[0] === 0x47 && b[1] === 0x49) return 'image/gif';
-		return blob.type || 'image/png';
+		return 'image/png';
 	}
 
-	async function decodeImage(blob) {
-		blob = new Blob([blob], { type: await imageType(blob) });
-		try {
-			const url = await new Promise((resolve, reject) => {
-				const reader = new FileReader();
-				reader.addEventListener('load', () => resolve(reader.result));
-				reader.addEventListener('error', () => reject(reader.error));
-				reader.readAsDataURL(blob);
-			});
-			return await new Promise((resolve, reject) => {
-				const img = new Image();
-				img.addEventListener('load', () => resolve(img));
-				img.addEventListener('error', () => reject(new Error('image did not decode')));
-				img.src = url;
-			});
-		} catch (e) {
-			// Where a page's CSP doesn't allow data: images: decode the bytes directly.
-			const bitmap = await createImageBitmap(blob);
-			const canvas = document.createElement('canvas');
-			canvas.width = bitmap.width;
-			canvas.height = bitmap.height;
-			canvas.getContext('2d').drawImage(bitmap, 0, 0);
-			return canvas;
-		}
+	// Firefox counts any image an add-on makes as foreign to the page, even one from a data:
+	// URL: WebGL refuses it ("The operation is insecure") and a canvas it's drawn on can't be
+	// read. A bitmap decoded from bytes the add-on fetched itself is the page's to use.
+	function decodeImage(bytes) {
+		return createImageBitmap(new Blob([bytes], { type: imageType(bytes) }), { premultiplyAlpha: 'none' });
 	}
 
 	// ---------------------------------------------------------------------------
@@ -250,8 +220,7 @@
 		return b;
 	}
 
-	// Works out where the neck is, to frame head and shoulders and to turn the avatar about
-	// its middle.
+	// Works out where the neck is, to frame head and shoulders and to turn the head on it.
 	function analyse(groups) {
 		for (const g of groups) g.box = bounds(g.data);
 		const all = { min: [0, 1, 2].map(k => Math.min(...groups.map(g => g.box.min[k]))), max: [0, 1, 2].map(k => Math.max(...groups.map(g => g.box.max[k]))) };
@@ -288,6 +257,7 @@
 		return {
 			parts: groups,
 			axis: [pivot[0], pivot[2]],
+			neck, headH,
 			view: { center: [pivot[0], (bottom + top) / 2, pivot[2]], height: top - bottom },
 			headAt: (top - (neck + headH * 0.5)) / (top - bottom)
 		};
@@ -340,13 +310,19 @@
 	// Renderer
 	// ---------------------------------------------------------------------------
 
+	// The head turns further than the body. Rather than cutting the mesh at the neck (most
+	// avatars are one piece there), each vertex blends from the body's turn to the head's
+	// over a short band just below the neck, so the neck twists instead of tearing.
 	const VERT = `
 attribute vec3 aPos; attribute vec3 aNrm; attribute vec2 aUv; attribute vec4 aCol;
-uniform mat4 uViewProj; uniform mat4 uModel; uniform mat3 uNormal;
+uniform mat4 uViewProj; uniform mat4 uBody; uniform mat4 uHead; uniform mat3 uBodyN; uniform mat3 uHeadN;
+uniform vec2 uNeck;
 varying vec3 vNrm; varying vec3 vPos; varying vec2 vUv; varying vec4 vCol;
 void main() {
-	vec4 w = uModel * vec4(aPos, 1.0);
-	vPos = w.xyz; vNrm = uNormal * aNrm; vUv = aUv; vCol = aCol;
+	float h = smoothstep(uNeck.x, uNeck.y, aPos.y);
+	vec4 p = vec4(aPos, 1.0);
+	vec4 w = mix(uBody * p, uHead * p, h);
+	vPos = w.xyz; vNrm = mix(uBodyN * aNrm, uHeadN * aNrm, h); vUv = vec2(aUv.x, 1.0 - aUv.y); vCol = aCol;
 	gl_Position = uViewProj * w;
 }`;
 	// Like Roblox's viewer: Kd × vertex colour × texture, matte; texture alpha only cuts out
@@ -381,30 +357,36 @@ void main() {
 			return s;
 		};
 		const prog = gl.createProgram();
-		gl.attachShader(prog, shader(gl.VERTEX_SHADER, VERT));
-		gl.attachShader(prog, shader(gl.FRAGMENT_SHADER, FRAG));
+		const shaders = [shader(gl.VERTEX_SHADER, VERT), shader(gl.FRAGMENT_SHADER, FRAG)];
+		for (const sh of shaders) gl.attachShader(prog, sh);
 		gl.linkProgram(prog);
+		// They go with the program now.
+		for (const sh of shaders) gl.deleteShader(sh);
 		if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog) || 'link');
 		const loc = {};
 		for (const a of ['aPos', 'aNrm', 'aUv', 'aCol']) loc[a] = gl.getAttribLocation(prog, a);
-		for (const u of ['uViewProj', 'uModel', 'uNormal', 'uMap', 'uHasMap', 'uCutout', 'uKd', 'uOpacity', 'uEye']) loc[u] = gl.getUniformLocation(prog, u);
+		for (const u of ['uViewProj', 'uBody', 'uHead', 'uBodyN', 'uHeadN', 'uNeck', 'uMap', 'uHasMap', 'uCutout', 'uKd', 'uOpacity', 'uEye']) loc[u] = gl.getUniformLocation(prog, u);
 		return { prog, loc };
 	}
 
+	const CONTEXT = { antialias: true, alpha: false, preserveDrawingBuffer: false, powerPreference: 'low-power' };
+	// A canvas keeps the first context it hands out, so every caller asks the same way.
+	const context = canvas => canvas.getContext('webgl2', CONTEXT) || canvas.getContext('webgl', CONTEXT);
+
 	function createRenderer(canvas, model, onLost) {
-		const opts = { antialias: true, alpha: false, preserveDrawingBuffer: false, powerPreference: 'low-power' };
-		const gl = canvas.getContext('webgl2', opts) || canvas.getContext('webgl', opts);
+		const gl = context(canvas);
 		if (!gl) throw new Error('WebGL unavailable');
 		const webgl2 = typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext;
 		const { prog, loc } = compile(gl);
 		let lost = false;
-		canvas.addEventListener('webglcontextlost', e => {
+		const onContextLost = e => {
 			e.preventDefault();
 			lost = true;
 			if (onLost) onLost();
-		});
+		};
+		canvas.addEventListener('webglcontextlost', onContextLost);
 
-		const textures = new Map(); // hash -> WebGLTexture, once loaded
+		const textures = new Map(); // hash -> WebGLTexture, once decoded
 		const items = model.parts.map(part => {
 			const info = model.materials[part.material] || {};
 			const kd = (info.kd || '1 1 1').split(/\s+/).slice(0, 3).map(Number);
@@ -426,19 +408,31 @@ void main() {
 		let frameRequested = null;
 		const hashes = [...new Set(items.map(i => i.map).filter(Boolean))];
 		let loadedCount = 0;
-		const loads = hashes.map(hash => cdnTexture(hash).then(img => {
-			if (lost) return;
+		const loads = hashes.map(async hash => {
+			const bytes = model.images && model.images[hash];
+			if (!bytes) return;
+			let img;
+			try {
+				img = await decodeImage(bytes);
+			} catch (e) {
+				return warn('texture', hash, 'did not decode:', e.message);
+			}
+			if (lost) return img.close();
+			const { width, height } = img;
 			const tex = gl.createTexture();
 			gl.bindTexture(gl.TEXTURE_2D, tex);
-			gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+			// Bitmaps ignore UNPACK_FLIP_Y, so V is flipped in the shader instead.
+			gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
 			try {
 				gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
 			} catch (e) {
-				warn('texture', hash, 'could not be uploaded:', e.message);
-				return;
+				gl.deleteTexture(tex);
+				return warn('texture', hash, 'could not be uploaded:', e.message);
+			} finally {
+				img.close();
 			}
 			const pot = n => (n & (n - 1)) === 0;
-			if (webgl2 || (pot(img.width) && pot(img.height))) {
+			if (webgl2 || (pot(width) && pot(height))) {
 				gl.generateMipmap(gl.TEXTURE_2D);
 				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
 				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
@@ -452,10 +446,10 @@ void main() {
 			textures.set(hash, tex);
 			loadedCount++;
 			if (frameRequested) frameRequested();
-		}, e => warn('texture', hash, 'failed:', e.message)));
-		// Ready once every texture has arrived (or given up), so it never shows up bare;
-		// a slow texture doesn't hold it back for more than a few seconds.
-		const ready = Promise.race([Promise.allSettled(loads), new Promise(r => setTimeout(r, 4000))]).then(() => {
+		});
+		// Ready once every texture is decoded, so it never shows up bare; that's quick, as the
+		// bytes are already here (see load), but a stuck one doesn't hold it back for long.
+		const ready = Promise.race([Promise.all(loads), new Promise(r => setTimeout(r, 1500))]).then(() => {
 			console.info(`[BloxRegion] 3D avatar: ${items.length} parts, ${loadedCount}/${hashes.length} textures`);
 		});
 
@@ -467,6 +461,8 @@ void main() {
 		const eye = [center[0], center[1] + dist * 0.06, center[2] - dist];
 		const proj = M.perspective(fov, canvas.width / canvas.height, dist * 0.05, dist * 20);
 		const viewProj = M.mul(proj, M.lookAt(eye, center, [0, 1, 0]));
+		// The neck band the head's turn fades out over (see VERT).
+		const neckBand = [model.neck - model.headH * 0.14, model.neck + model.headH * 0.02];
 
 		function render(pose) {
 			if (lost) return;
@@ -480,14 +476,17 @@ void main() {
 			gl.uniform3fv(loc.uEye, eye);
 			gl.uniform1i(loc.uMap, 0);
 
-			// The whole avatar (head, torso and arms together) turns toward the cursor about
-			// its middle, and breathes.
+			// The body turns a little toward the cursor and breathes; the head turns the rest of
+			// the way and nods, on the neck.
 			const [ax, az] = model.axis;
 			const breathe = Math.sin(pose.time * 2.1) * model.view.height * 0.004;
-			const turn = M.about([ax, model.view.center[1], az], M.mul(M.rotY(pose.yaw * DEG), M.rotX(pose.pitch * DEG)));
-			const m = M.mul(M.translate(0, breathe, 0), turn);
-			gl.uniformMatrix4fv(loc.uModel, false, m);
-			gl.uniformMatrix3fv(loc.uNormal, false, M.normal3(m));
+			const body = M.mul(M.translate(0, breathe, 0), M.about([ax, 0, az], M.rotY(pose.body * DEG)));
+			const head = M.mul(body, M.about([ax, model.neck, az], M.mul(M.rotY((pose.yaw - pose.body) * DEG), M.rotX(pose.pitch * DEG))));
+			gl.uniformMatrix4fv(loc.uBody, false, body);
+			gl.uniformMatrix4fv(loc.uHead, false, head);
+			gl.uniformMatrix3fv(loc.uBodyN, false, M.normal3(body));
+			gl.uniformMatrix3fv(loc.uHeadN, false, M.normal3(head));
+			gl.uniform2fv(loc.uNeck, neckBand);
 
 			for (const item of items) {
 				gl.uniform3fv(loc.uKd, item.kd);
@@ -528,10 +527,20 @@ void main() {
 			ready,
 			// Called when a texture arrives, so the caller can draw a fresh frame.
 			onChange(fn) { frameRequested = fn; },
-			destroy() {
+			// Frees what this avatar put on the GPU. The canvas can take another one; `release`
+			// also gives up the canvas's context, for when it's going away.
+			destroy(release) {
+				if (lost) return;
 				lost = true;
-				const ext = gl.getExtension('WEBGL_lose_context');
-				if (ext) ext.loseContext();
+				canvas.removeEventListener('webglcontextlost', onContextLost);
+				if (release) {
+					const ext = gl.getExtension('WEBGL_lose_context');
+					if (ext) ext.loseContext();
+					return;
+				}
+				for (const item of items) gl.deleteBuffer(item.buf);
+				for (const tex of textures.values()) gl.deleteTexture(tex);
+				gl.deleteProgram(prog);
 			}
 		};
 	}
@@ -540,7 +549,8 @@ void main() {
 	// Entry point
 	// ---------------------------------------------------------------------------
 
-	// Loads a player's avatar: { url, model }, or throws. `knownUrl` skips the API lookup.
+	// Loads a player's avatar: { url, model, complete }, or throws. `knownUrl` skips the API
+	// lookup. `complete` says every texture arrived.
 	async function load(userId, knownUrl) {
 		const url = knownUrl || await modelUrl(userId);
 		if (!url) throw new Error('no 3D avatar');
@@ -549,19 +559,65 @@ void main() {
 		const meta = await res.json();
 		const objHash = cleanHash(meta && meta.obj), mtlHash = cleanHash(meta && meta.mtl);
 		if (!objHash || !mtlHash) throw new Error('3D avatar incomplete');
+		const textures = (Array.isArray(meta.textures) ? meta.textures : []).map(cleanHash).filter(Boolean);
+		// Everything at once: the OBJ, the MTL and the textures.
+		const images = {}, fetching = new Map();
+		const fetchTexture = hash => {
+			if (!fetching.has(hash)) {
+				fetching.set(hash, cdnBytes(hash).then(bytes => { images[hash] = bytes; }, e => warn('texture', hash, 'failed:', e.message)));
+			}
+		};
+		textures.forEach(fetchTexture);
 		const [objText, mtlText] = await Promise.all([cdnText(objHash), cdnText(mtlHash)]);
+		const materials = parseMtl(mtlText);
+		// Any texture the MTL uses that the list left out.
+		for (const info of Object.values(materials)) {
+			const hash = info.map_kd && textureHash(info.map_kd, textures);
+			if (hash) fetchTexture(hash);
+		}
 		const groups = await parseObj(objText);
 		if (!groups.length) throw new Error('empty avatar');
 		const model = analyse(groups);
-		model.materials = parseMtl(mtlText);
-		model.textures = (Array.isArray(meta.textures) ? meta.textures : []).map(cleanHash).filter(Boolean);
-		return { url, model };
+		model.materials = materials;
+		model.textures = textures;
+		await Promise.all(fetching.values());
+		model.images = images;
+		return { url, model, complete: Object.keys(images).length === fetching.size };
 	}
 
-	function supported() {
+	// The last avatar loaded is kept, parsed and with its textures, in the add-on's storage:
+	// the next page draws it from there at once instead of downloading and parsing it again
+	// while the page itself is loading. (Firefox stores typed arrays as they are.)
+	const CACHE_KEY = 'brAvatar3d';
+	const CACHE_FORMAT = 1;
+
+	// The kept avatar if it's this player's: { url, model, recalled: true }, or null.
+	function recall(userId) {
+		return new Promise(resolve => {
+			try {
+				chrome.storage.local.get(CACHE_KEY, v => {
+					const c = v && v[CACHE_KEY];
+					const ok = !!c && c.format === CACHE_FORMAT && c.user === userId && typeof c.url === 'string' &&
+						!!c.model && Array.isArray(c.model.parts) && c.model.parts.every(p => ArrayBuffer.isView(p.data) && p.data.BYTES_PER_ELEMENT === 4);
+					resolve(ok ? { url: c.url, model: c.model, recalled: true } : null);
+				});
+			} catch (e) {
+				resolve(null);
+			}
+		});
+	}
+
+	function remember(userId, loaded) {
 		try {
-			const c = document.createElement('canvas');
-			return !!(window.WebGLRenderingContext && (c.getContext('webgl2') || c.getContext('webgl')));
+			chrome.storage.local.set({ [CACHE_KEY]: { format: CACHE_FORMAT, user: userId, url: loaded.url, model: loaded.model } });
+		} catch (e) {}
+	}
+
+	// Whether `canvas` can draw the avatar (asked the same way the renderer asks, so it's the
+	// same context).
+	function supported(canvas) {
+		try {
+			return !!context(canvas);
 		} catch (e) {
 			return false;
 		}
@@ -571,8 +627,8 @@ void main() {
 	async function fetchImage(url) {
 		const res = await fetch(url, { credentials: 'omit' });
 		if (!res.ok) throw new Error('HTTP ' + res.status);
-		return decodeImage(await res.blob());
+		return decodeImage(await res.arrayBuffer());
 	}
 
-	window.__brAvatar3d = { load, modelUrl, createRenderer, supported, fetchImage };
+	window.__brAvatar3d = { load, recall, remember, modelUrl, createRenderer, supported, fetchImage };
 })();
