@@ -1,11 +1,10 @@
 /*
  * BloxRegion — ViewPort (an easter egg)
  *
- * A small retro window with the player's avatar: the head follows the cursor and the
- * torso turns slightly toward it, like the player in Minecraft's inventory. Typing
- * "ViewPort" into BloxRegion's search field opens it; it then stays on every roblox.com
- * page, wherever it was dragged, until its X is pressed. The state lives in storage, so
- * every open tab agrees.
+ * A small retro window with the player's avatar, which turns to follow the cursor like
+ * the player in Minecraft's inventory. Typing "ViewPort" into BloxRegion's search field
+ * opens it; it then stays on every roblox.com page, wherever it was dragged, until its X
+ * is pressed. The state lives in storage, so every open tab agrees.
  *
  * The avatar is the player's real 3D avatar (avatar3d.js). Until it has loaded, or if it
  * can't be, Roblox's bust render stands in: cut at the neck into a head layer and a torso
@@ -236,9 +235,13 @@
 		close.title = 'Close';
 		close.setAttribute('aria-label', 'Close ViewPort');
 		close.append(closeGlyph());
+		// Closing also forgets the kept avatar: opening it again loads the player's current
+		// one, with whatever they've changed since.
 		close.addEventListener('click', () => {
 			unmount();
 			save({ open: false });
+			if (window.__brAvatar3d) window.__brAvatar3d.forget();
+			saveUser({ model: null, modelAt: 0 });
 		});
 		const nameSlot = document.createElement('span');
 		nameSlot.className = 'brv-name';
@@ -526,11 +529,11 @@
 				V.pivot = { x: r.left + r.width * V.cx, y: r.top + r.height * V.neck * 0.62 };
 			}
 		}
-		// Minecraft's inventory model: atan of the offset. The head turns (and nods) much
-		// further than the body.
+		// Minecraft's inventory model: atan of the offset. The 3D avatar turns as one; the
+		// flat one turns its head further than its body.
 		const f = Math.atan((e.clientX - V.pivot.x) / 90);
 		const g = Math.atan((e.clientY - V.pivot.y) / 90);
-		const k = V.r3d ? [36, 16, 11] : [22, 12, 8];
+		const k = V.r3d ? [36, 7, 0] : [22, 12, 8];
 		V.target.yaw = f * k[0];
 		V.target.pitch = -g * k[1];
 		V.target.body = f * k[2];

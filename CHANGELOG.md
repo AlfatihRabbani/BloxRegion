@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.4.2
+
+- Bug fixes and small improvements.
+
 ## 2.4.1
 
 - Bug fixes and small improvements.
