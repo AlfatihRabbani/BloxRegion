@@ -19,6 +19,9 @@
   BloxRegion in `about:addons` to stop downloads altogether.
 - **Updates no longer reload your Roblox tabs** — when BloxRegion updates,
   open game pages switch to the new version in place.
+- **Friends: only servers you can join** — friends who hide their server, or
+  who are in a full or private one, are no longer listed (or counted). Full
+  servers are checked again after a minute in case a spot opens up.
 - Joining a server, joining a friend and reading Roblox's security token now
   call Roblox's page functions directly instead of injecting script text into
   the page.

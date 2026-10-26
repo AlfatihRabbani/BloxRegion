@@ -275,7 +275,7 @@
 			} catch (e) { resolve(null); }
 		});
 	}
-	// Runs one of the background script's fixed page functions (csrf, join, follow) in the
+	// Runs one of the background script's fixed page functions (csrf, join) in the
 	// page itself, where Roblox's own scripts live.
 	const pageCall = (call, ...args) => sendMsg({ action: 'brPage', call, args });
 
@@ -1099,11 +1099,13 @@
 		list: [],             // { id, name, displayName }
 		presence: new Map(),  // userId -> presence
 		avatars: new Map(),   // userId -> headshot url
-		regions: new Map(),   // gameId -> { code, la, lo } | null when it can't be resolved
+		regions: new Map(),   // gameId -> { code, la, lo } of servers that can be joined
+		failed: new Map(),    // gameId -> when it last couldn't be reached (full, private, …)
 		updatedAt: 0,
 		loading: null
 	};
 	const FRIENDS_TTL = 20000;
+	const FRIEND_RETRY = 60000; // servers fill up and empty out; look again after a minute
 	const friendLookups = new Set();
 
 	async function fetchFriendList(userId) {
@@ -1184,7 +1186,8 @@
 		return FRIENDS.loading;
 	}
 
-	// Groups friends by the server they're in: this game, other games, server hidden, or just online.
+	// Groups friends by the server they're in (this game or another), or just online. Friends
+	// whose server is hidden by their privacy settings aren't listed.
 	let friendGroupsMemo = null, friendGroupsKey = '';
 	function friendGroups() {
 		const memoKey = FRIENDS.updatedAt + ':' + FRIENDS.list.length;
@@ -1194,7 +1197,7 @@
 		return friendGroupsMemo;
 	}
 	function buildFriendGroups() {
-		const here = new Map(), elsewhere = new Map(), hidden = [], online = [];
+		const here = new Map(), elsewhere = new Map(), online = [];
 		for (const f of FRIENDS.list) {
 			const p = FRIENDS.presence.get(f.id);
 			if (!p) continue;
@@ -1205,23 +1208,31 @@
 				let g = bucket.get(p.gameId);
 				if (!g) bucket.set(p.gameId, g = { key: p.gameId, gameId: p.gameId, placeId: p.placeId, game: p.lastLocation || 'Roblox experience', here: isHere, friends: [] });
 				g.friends.push(f);
-			} else if (type === 2) {
-				hidden.push({ key: 'hidden:' + f.id, gameId: null, placeId: p.placeId || null, game: p.lastLocation || 'In a game', here: false, hidden: true, friends: [f] });
 			} else if (type === 1 || type === 3) {
 				online.push({ friend: f, where: type === 3 ? 'In Studio' : 'Online' });
 			}
 		}
-		return { here: [...here.values()], elsewhere: [...elsewhere.values()], hidden, online };
+		return { here: [...here.values()], elsewhere: [...elsewhere.values()], online };
+	}
+
+	// Only servers that can be joined are shown: found, and their location known. Ones still
+	// being looked up stay out of sight, and ones that can't be reached are left out.
+	function joinableFriendGroups() {
+		const g = friendGroups();
+		const ok = x => FRIENDS.regions.has(x.gameId);
+		const waiting = [...g.here, ...g.elsewhere].some(x => !ok(x) && !FRIENDS.failed.has(x.gameId));
+		return { here: g.here.filter(ok), elsewhere: g.elsewhere.filter(ok), online: g.online, waiting };
 	}
 
 	function friendSummary() {
 		if (FRIENDS.state === 'signed-out') return { count: 0, sub: 'Sign in to see friends', here: 0 };
 		if (FRIENDS.state !== 'ready') return { count: 0, sub: FRIENDS.state === 'error' ? 'Couldn’t load friends' : 'Loading…', here: 0 };
-		const g = friendGroups();
+		const g = joinableFriendGroups();
 		const here = g.here.reduce((n, x) => n + x.friends.length, 0);
-		const playing = here + g.elsewhere.reduce((n, x) => n + x.friends.length, 0) + g.hidden.length;
-		let sub = 'No one online';
+		const playing = here + g.elsewhere.reduce((n, x) => n + x.friends.length, 0);
+		let sub = 'No one to join';
 		if (playing) sub = here ? `${here} here · ${playing} playing` : `${playing} playing`;
+		else if (g.waiting) sub = 'Finding their servers…';
 		else if (g.online.length) sub = `${g.online.length} online`;
 		return { count: playing, sub, here, online: g.online.length };
 	}
@@ -1250,6 +1261,7 @@
 		const { here, elsewhere } = friendGroups();
 		for (const g of [...here, ...elsewhere]) {
 			if (FRIENDS.regions.has(g.gameId) || friendLookups.has(g.gameId)) continue;
+			if (Date.now() - (FRIENDS.failed.get(g.gameId) || 0) < FRIEND_RETRY) continue;
 			const known = S.placeOf.get(g.gameId);
 			if (known && known.c !== '??') {
 				FRIENDS.regions.set(g.gameId, { code: known.c, la: known.l ? known.l.la : null, lo: known.l ? known.l.lo : null });
@@ -1270,6 +1282,7 @@
 			const r = await joinLookup(g.placeId, g.gameId);
 			if (r.result === 'ok') {
 				FRIENDS.regions.set(g.gameId, { code: r.loc.code, la: r.loc.la, lo: r.loc.lo });
+				FRIENDS.failed.delete(g.gameId);
 				rememberJob(g.gameId, r.loc);
 				scheduleUpdate();
 				return;
@@ -1277,8 +1290,8 @@
 			if (r.result !== 'limited') break;
 			await sleep(1200 * (attempt + 1));
 		}
-		// Full or restricted servers don't reveal their address.
-		FRIENDS.regions.set(g.gameId, null);
+		// Full or restricted servers don't reveal their address: not shown, tried again later.
+		FRIENDS.failed.set(g.gameId, Date.now());
 		scheduleUpdate();
 	}
 
@@ -1413,14 +1426,6 @@
 		pauseForLaunch(15000);
 		pageCall('join', Number(targetPlaceId), String(serverId));
 		toast(code ? 'Launching Roblox · ' + regionTitle(code) : 'Launching Roblox…', 'play');
-		setTimeout(closeWindow, 500);
-	}
-
-	// Roblox's own "join friend" flow, which also handles friends whose server is hidden.
-	function followFriend(friend) {
-		pauseForLaunch(15000);
-		pageCall('follow', Number(friend.id));
-		toast('Joining ' + (friend.displayName || friend.name) + '…', 'people');
 		setTimeout(closeWindow, 500);
 	}
 
@@ -2312,8 +2317,7 @@
 		const friendsRow = h('div', { class: 'br-card-friends' });
 		const regionV = h('span', { class: 'br-v' });
 		const pingV = h('span', { class: 'br-v' });
-		const joinLabel = h('span', { text: 'Join' });
-		const join = h('button', { type: 'button', class: 'br-btn is-primary' }, icon('play'), joinLabel);
+		const join = h('button', { type: 'button', class: 'br-btn is-primary' }, icon('play'), 'Join');
 		const el = h('article', { class: 'br-card br-shine is-friend' },
 			h('div', { class: 'br-card-top' }, gameEl, playersEl),
 			friendsRow,
@@ -2324,22 +2328,17 @@
 		let signature = '';
 		join.addEventListener('click', () => {
 			if (!group) return;
-			if (group.gameId) {
-				const r = FRIENDS.regions.get(group.gameId);
-				joinServer(group.gameId, r ? r.code : null, group.placeId);
-			} else {
-				followFriend(group.friends[0]);
-			}
+			const r = FRIENDS.regions.get(group.gameId);
+			joinServer(group.gameId, r ? r.code : null, group.placeId);
 		});
 		return {
 			el,
 			update(next) {
 				group = next;
-				const region = next.gameId ? FRIENDS.regions.get(next.gameId) : null;
-				const pending = !!next.gameId && !FRIENDS.regions.has(next.gameId);
-				const server = next.gameId && next.here ? S.servers.get(next.gameId) : null;
+				const region = FRIENDS.regions.get(next.gameId);
+				const server = next.here ? S.servers.get(next.gameId) : null;
 				const sig = [next.game, next.here, next.friends.map(f => f.id + (FRIENDS.avatars.has(f.id) ? '+' : '')).join(','),
-					region ? region.code : pending ? 'pending' : 'none', server ? server.playing : '', S.userLoc ? 'loc' : ''].join('|');
+					region ? region.code : 'none', server ? server.playing : '', S.userLoc ? 'loc' : ''].join('|');
 				if (sig === signature) return;
 				signature = sig;
 				gameEl.textContent = '';
@@ -2356,11 +2355,9 @@
 					pingV.textContent = Number.isFinite(ping) ? '~' + ping + ' ms' : '—';
 					if (pingTier(ping)) pingV.classList.add('is-' + pingTier(ping));
 				} else {
-					regionV.textContent = next.hidden ? 'Hidden' : pending ? 'Looking up…' : 'Unavailable';
-					regionV.title = next.hidden ? 'Their privacy settings hide which server they’re in' : pending ? '' : 'Full or private servers don’t reveal their location';
+					regionV.textContent = '—';
 					pingV.textContent = '—';
 				}
-				joinLabel.textContent = next.hidden ? 'Try to join' : 'Join';
 			}
 		};
 	}
@@ -2405,10 +2402,10 @@
 		}
 
 		function update() {
-			const g = friendGroups();
+			const g = joinableFriendGroups();
 			const summary = friendSummary();
 			const here = g.here;
-			const elsewhere = [...g.elsewhere, ...g.hidden];
+			const elsewhere = g.elsewhere;
 			const ready = FRIENDS.state === 'ready';
 
 			if (ready) setTitle(null, 'Friends', `${summary.here} in this game · ${summary.count - summary.here} in other games · ${g.online.length} online`);
@@ -2453,9 +2450,15 @@
 			} else if (!FRIENDS.list.length) {
 				title = 'No friends yet';
 				sub = 'Add friends on Roblox and they’ll show up here when they play.';
+			} else if (!here.length && !elsewhere.length && g.waiting) {
+				title = 'Finding your friends’ servers…';
+				sub = 'Checking which servers they’re in and whether you can join them.';
 			} else if (!here.length && !elsewhere.length && !online.length) {
-				title = 'None of your friends are online';
-				sub = 'This list refreshes on its own every 30 seconds.';
+				const inGames = friendGroups().here.length + friendGroups().elsewhere.length;
+				title = inGames ? 'No friends in servers you can join' : 'None of your friends are online';
+				sub = inGames
+					? 'Friends in full or private servers, or who hide their server, aren’t shown. This list refreshes every 30 seconds.'
+					: 'This list refreshes on its own every 30 seconds.';
 			}
 			empty.classList.toggle('is-hidden', !title);
 			setText(emptyTitle, title);

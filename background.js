@@ -20,16 +20,6 @@ const BR_PAGE_CALLS = {
     } catch (e) {
       return false;
     }
-  },
-  follow: (userId) => {
-    try {
-      const launcher = window.Roblox && window.Roblox.GameLauncher;
-      if (!launcher || !launcher.followPlayerIntoGame) return false;
-      launcher.followPlayerIntoGame(userId);
-      return true;
-    } catch (e) {
-      return false;
-    }
   }
 };
 
