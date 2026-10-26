@@ -1,0 +1,120 @@
+# Changes past releases after the fact. Run it by hand from the Actions tab.
+#
+# "notes": versions (e.g. "2.3 2.4.1") whose notes are rewritten from their CHANGELOG.md
+# section, on their GitHub release (if it still has one) and on Firefox Add-ons (AMO).
+# Edit CHANGELOG.md first. Uses the same AMO_JWT_ISSUER / AMO_JWT_SECRET secrets as
+# publish-firefox.yml.
+#
+# "delete": tags (e.g. "v2.3 v2.4") whose GitHub releases are deleted. The tags stay,
+# and AMO keeps the versions.
+
+name: Edit past releases
+
+on:
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: Versions whose notes to rewrite from CHANGELOG.md (e.g. 2.3 2.4.1)
+        required: false
+      delete:
+        description: Tags whose GitHub releases to delete (e.g. v2.3 v2.4)
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: amo-publish
+  cancel-in-progress: false
+
+jobs:
+  edit:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NOTES: ${{ inputs.notes }}
+      DELETE: ${{ inputs.delete }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Delete GitHub releases
+        if: inputs.delete != ''
+        run: |
+          for tag in $DELETE; do
+            gh release delete "$tag" -R "$GITHUB_REPOSITORY" --yes
+            echo "Deleted the $tag release (the tag stays)."
+          done
+
+      - name: Rewrite notes
+        if: inputs.notes != ''
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          node -e "
+            const fs = require('fs');
+            const crypto = require('crypto');
+            const { execFileSync } = require('child_process');
+            const lines = fs.readFileSync('CHANGELOG.md', 'utf8').replace(/\r/g, '').split('\n');
+            const guid = require('./manifest.json').browser_specific_settings.gecko.id;
+
+            // A version's CHANGELOG.md section, as publish-firefox.yml writes release text.
+            const section = v => {
+              const start = lines.indexOf('## ' + v);
+              if (start < 0) throw new Error('CHANGELOG.md has no \'## ' + v + '\' section');
+              const out = [];
+              for (const line of lines.slice(start + 1)) {
+                if (line.startsWith('## ')) break;
+                if (/^\s+\S/.test(line) && out.length && out[out.length - 1].trim()) out[out.length - 1] += ' ' + line.trim();
+                else out.push(line);
+              }
+              return out.join('\n').trim() + '\n';
+            };
+            // AMO shows plain text.
+            const plain = md => md
+              .replace(/\*\*(.+?)\*\*/g, '\$1')
+              .replace(/\`([^\`]+)\`/g, '\$1')
+              .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '\$1 (\$2)')
+              .trim()
+              .slice(0, 3000);
+            const jwt = () => {
+              const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
+              const now = Math.floor(Date.now() / 1000);
+              const body = b64({ alg: 'HS256', typ: 'JWT' }) + '.' + b64({ iss: process.env.AMO_JWT_ISSUER, jti: crypto.randomUUID(), iat: now, exp: now + 60 });
+              return body + '.' + crypto.createHmac('sha256', process.env.AMO_JWT_SECRET).update(body).digest('base64url');
+            };
+
+            (async () => {
+              let failed = false;
+              for (const v of process.env.NOTES.split(/\s+/).filter(Boolean)) {
+                try {
+                  const notes = section(v);
+                  const file = process.env.RUNNER_TEMP + '/notes-' + v + '.md';
+                  fs.writeFileSync(file, notes);
+                  try {
+                    execFileSync('gh', ['release', 'view', 'v' + v, '-R', process.env.GITHUB_REPOSITORY], { stdio: 'ignore' });
+                    execFileSync('gh', ['release', 'edit', 'v' + v, '-R', process.env.GITHUB_REPOSITORY, '--notes-file', file], { stdio: 'inherit' });
+                    console.log(v + ': GitHub release notes rewritten');
+                  } catch (e) {
+                    console.log(v + ': no GitHub release, skipped');
+                  }
+                  if (!process.env.AMO_JWT_ISSUER || !process.env.AMO_JWT_SECRET) throw new Error('AMO_JWT_ISSUER / AMO_JWT_SECRET are not set');
+                  const res = await fetch('https://addons.mozilla.org/api/v5/addons/addon/' + encodeURIComponent(guid) + '/versions/v' + v + '/', {
+                    method: 'PATCH',
+                    headers: { Authorization: 'JWT ' + jwt(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ release_notes: { 'en-US': plain(notes) } })
+                  });
+                  if (!res.ok) throw new Error('AMO answered ' + res.status + ': ' + (await res.text()).slice(0, 300));
+                  console.log(v + ': AMO release notes rewritten');
+                } catch (e) {
+                  failed = true;
+                  console.log('::error::' + v + ': ' + e.message);
+                }
+              }
+              if (failed) process.exit(1);
+            })();
+          "
