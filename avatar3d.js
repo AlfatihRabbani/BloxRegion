@@ -269,8 +269,8 @@
 	// with the legs. Pieces move whole, so nothing bends.
 	const LEGS = 0, BODY = 1, HEAD = 2;
 
-	// Works out where the neck and hips are, to frame head and shoulders and to sort the
-	// pieces into head, body and legs.
+	// Works out where the neck is, to frame head and shoulders, and sorts the pieces into
+	// head, body and legs.
 	async function analyse(groups) {
 		for (const g of groups) g.box = bounds(g.data);
 		const all = { min: [0, 1, 2].map(k => Math.min(...groups.map(g => g.box.min[k]))), max: [0, 1, 2].map(k => Math.max(...groups.map(g => g.box.max[k]))) };
@@ -308,58 +308,60 @@
 		const headH = Math.max(headBox.max[1] - neck, height * 0.08);
 		const pivot = [(headBox.min[0] + headBox.max[0]) / 2, neck, (headBox.min[2] + headBox.max[2]) / 2];
 
-		// The hips: just below the hands (the lowest slice, above the feet, about as wide as
-		// the shoulders with the arms beside them), within reason.
-		const neckBin = binOf(neck);
-		let shoulders = 0;
-		for (let b = Math.floor(neckBin * 0.75); b < neckBin; b++) shoulders = Math.max(shoulders, width(b));
-		let hands = neckBin;
-		for (let b = neckBin - 1; b >= Math.floor(bins * 0.2); b--) if (shoulders > 0 && width(b) >= shoulders * 0.8) hands = b;
-		const below = neck - all.min[1];
-		const hips = Math.min(Math.max(all.min[1] + height * hands / bins, all.min[1] + below * 0.3), all.min[1] + below * 0.65);
-		// Where the legs are side to side: whatever is well below the hands.
-		const legs = { lo: Infinity, hi: -Infinity }, knees = all.min[1] + (hips - all.min[1]) * 0.8;
-		for (const g of groups) {
-			const d = g.data;
-			for (let i = 0; i < d.length; i += STRIDE) {
-				if (d[i + 1] < knees) {
-					if (d[i] < legs.lo) legs.lo = d[i];
-					if (d[i] > legs.hi) legs.hi = d[i];
-				}
-			}
-		}
-		await sleep(0);
-
-		// Each piece's extent: x0, x1, y0, y1.
+		// Each piece's extent: x0, x1, y0, y1, z0, z1.
 		let count = 0;
 		for (const g of groups) for (const piece of g.pieces) count = Math.max(count, piece + 1);
-		const box = new Float64Array(count * 4);
-		for (let k = 0; k < count; k++) box.set([Infinity, -Infinity, Infinity, -Infinity], k * 4);
+		const box = new Float64Array(count * 6);
+		for (let k = 0; k < count; k++) box.set([Infinity, -Infinity, Infinity, -Infinity, Infinity, -Infinity], k * 6);
 		for (const g of groups) {
 			const d = g.data;
 			for (let t = 0, i = 0; t < g.pieces.length; t++) {
-				const b = g.pieces[t] * 4;
+				const b = g.pieces[t] * 6;
 				for (let end = i + 3 * STRIDE; i < end; i += STRIDE) {
-					const x = d[i], y = d[i + 1];
-					if (x < box[b]) box[b] = x;
-					if (x > box[b + 1]) box[b + 1] = x;
-					if (y < box[b + 2]) box[b + 2] = y;
-					if (y > box[b + 3]) box[b + 3] = y;
+					for (let a = 0; a < 3; a++) {
+						const v = d[i + a];
+						if (v < box[b + a * 2]) box[b + a * 2] = v;
+						if (v > box[b + a * 2 + 1]) box[b + a * 2 + 1] = v;
+					}
 				}
 			}
 		}
-		// The head and what's on it (hair down the back too); the legs, below the hips and
-		// between the hands; everything else is the body.
-		const joint = new Uint8Array(count);
+		const lowest = (k, a) => box[k * 6 + a * 2], highest = (k, a) => box[k * 6 + a * 2 + 1];
+		const mid = (k, a) => (lowest(k, a) + highest(k, a)) / 2;
+		const overlap = (k, m, a) => Math.min(highest(k, a), highest(m, a)) - Math.max(lowest(k, a), lowest(m, a));
+
+		// The head and what's on it (hair down the back too).
+		const joint = new Uint8Array(count).fill(BODY);
 		let heads = 0;
 		for (let k = 0; k < count; k++) {
-			const [x0, x1, y0, y1] = box.subarray(k * 4, k * 4 + 4);
-			const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-			let j = BODY;
-			if (cy >= neck || (y1 >= neck + headH * 0.5 && cy >= neck - headH * 1.2)) j = HEAD;
-			else if (cy < hips && y1 < hips + (neck - hips) * 0.5 && cx >= legs.lo && cx <= legs.hi) j = LEGS;
-			if (j === HEAD) heads++;
-			joint[k] = j;
+			if (mid(k, 1) >= neck || (highest(k, 1) >= neck + headH * 0.5 && mid(k, 1) >= neck - headH * 1.2)) {
+				joint[k] = HEAD;
+				heads++;
+			}
+		}
+		// The legs: what stands on the floor (feet, shoes, a long skirt), then whatever sits
+		// on top of that within its width (lower legs, then upper legs), up to the hips. Hands
+		// hang beside the legs rather than on them, so they stay with the body, and the torso
+		// is wider than either leg.
+		const floor = all.min[1], below = neck - floor;
+		const low = k => mid(k, 1) < floor + below * 0.5 && highest(k, 1) < floor + below * 0.65;
+		const legs = [];
+		for (let k = 0; k < count; k++) {
+			if (joint[k] === BODY && low(k) && lowest(k, 1) < floor + below * 0.05) {
+				joint[k] = LEGS;
+				legs.push(k);
+			}
+		}
+		for (let i = 0; i < legs.length; i++) {
+			const m = legs[i];
+			for (let k = 0; k < count; k++) {
+				if (joint[k] !== BODY || !low(k)) continue;
+				const wide = highest(k, 0) - lowest(k, 0), deep = highest(k, 2) - lowest(k, 2);
+				if (overlap(k, m, 0) >= wide * 0.6 && overlap(k, m, 2) >= deep * 0.3 && overlap(k, m, 1) > -height * 0.03) {
+					joint[k] = LEGS;
+					legs.push(k);
+				}
+			}
 		}
 		await sleep(0);
 		// Each group split by where its pieces go, copying runs of triangles at a time.
@@ -715,7 +717,7 @@ void main() {
 	// the next page draws it from there at once instead of downloading and parsing it again
 	// while the page itself is loading. (Firefox stores typed arrays as they are.)
 	const CACHE_KEY = 'brAvatar3d';
-	const CACHE_FORMAT = 3;
+	const CACHE_FORMAT = 4;
 
 	// The kept avatar if it's this player's: { url, model, recalled: true }, or null.
 	function recall(userId) {
