@@ -54,11 +54,6 @@
         "id": "ruleset_1",
         "enabled": true,
         "path": "json/rules.json"
-      },
-      {
-        "id": "ruleset_2",
-        "enabled": false,
-        "path": "json/regionRules.json"
       }
     ]
   },

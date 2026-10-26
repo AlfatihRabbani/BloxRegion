@@ -1,23 +1,34 @@
-const rrLaunchGameInstance = (placeId, instanceId) => {
-  const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-  if (isMobile) {
-    const url = instanceId
-      ? `https://www.roblox.com/games/start?placeid=${placeId}&gameId=${instanceId}`
-      : `https://www.roblox.com/games/start?placeid=${placeId}`;
-    const a = document.createElement('a');
-    a.href = url; a.rel = 'noopener noreferrer';
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  } else {
+// The only things the content script runs in the page itself (MAIN world), where Roblox's
+// own scripts live. executeScript sends each function's source, so they must be
+// self-contained arrow functions.
+const BR_PAGE_CALLS = {
+  csrf: () => {
     try {
-      if (window.Roblox?.GameLauncher?.joinGameInstance) {
-        window.Roblox.GameLauncher.joinGameInstance(placeId, instanceId);
-      } else {
-        throw new Error('GameLauncher unavailable');
-      }
-    } catch (err) {
-      window.location.href = instanceId
-        ? `roblox://placeId=${placeId}&gameInstanceId=${instanceId}`
-        : `roblox://placeId=${placeId}`;
+      const x = window.Roblox && window.Roblox.XsrfToken;
+      const token = x && x.getToken && x.getToken();
+      return typeof token === 'string' && token ? token : null;
+    } catch (e) {
+      return null;
+    }
+  },
+  join: (placeId, gameId) => {
+    try {
+      const launcher = window.Roblox && window.Roblox.GameLauncher;
+      if (!launcher || !launcher.joinGameInstance) return false;
+      launcher.joinGameInstance(placeId, gameId);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  },
+  follow: (userId) => {
+    try {
+      const launcher = window.Roblox && window.Roblox.GameLauncher;
+      if (!launcher || !launcher.followPlayerIntoGame) return false;
+      launcher.followPlayerIntoGame(userId);
+      return true;
+    } catch (e) {
+      return false;
     }
   }
 };
@@ -268,76 +279,20 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     return true;
   }
 
-  if (message.action === 'checkRoRegionPermission') {
-    sendResponse({ granted: true });
-    return false;
-  }
-
-  if (message.action === 'requestRoRegionPermission') {
-    sendResponse({ granted: true });
-    return false;
-  }
-
-  if (message.action === 'injectScript') {
-    const { codeToInject } = message;
+  if (message.action === 'brPage') {
+    const func = Object.hasOwn(BR_PAGE_CALLS, message.call) ? BR_PAGE_CALLS[message.call] : null;
+    if (!func || !sender.tab) {
+      sendResponse({ success: false });
+      return false;
+    }
     chrome.scripting.executeScript({
       target: { tabId: sender.tab.id },
       world: 'MAIN',
-      func: (code) => {
-        try {
-          const script = document.createElement('script');
-          script.textContent = code;
-          document.documentElement.appendChild(script);
-          script.remove();
-        } catch (error) {}
-      },
-      args: [codeToInject],
+      func,
+      args: Array.isArray(message.args) ? message.args : [],
     })
-      .then(() => sendResponse({ success: true }))
+      .then((results) => sendResponse({ success: true, result: results && results[0] ? results[0].result : null }))
       .catch((error) => sendResponse({ success: false, error: error.message }));
-    return true;
-  }
-
-  if (message.action === 'enableServerJoinHeaders') {
-    chrome.declarativeNetRequest.updateEnabledRulesets({ enableRulesetIds: ['ruleset_2'] });
-    return false;
-  }
-  if (message.action === 'disableServerJoinHeaders') {
-    chrome.declarativeNetRequest.updateEnabledRulesets({ disableRulesetIds: ['ruleset_2'] });
-    return false;
-  }
-
-  if (message.action === 'RR_LAUNCH_GAME') {
-    (async () => {
-      try {
-        const { placeId } = message;
-        await chrome.scripting.executeScript({
-          target: { tabId: sender.tab.id },
-          func: rrLaunchGameInstance,
-          args: [parseInt(placeId), ''],
-          world: 'MAIN',
-        });
-        sendResponse({ success: true });
-      } catch (err) {
-        sendResponse({ success: false, error: err.message });
-      }
-    })();
-    return true;
-  }
-
-  if (message.action === 'RR_LAUNCH_GAME_MOBILE') {
-    (async () => {
-      try {
-        const { placeId } = message;
-        const inner = encodeURIComponent(
-          `https://www.roblox.com/games/start?placeid=${placeId}`
-        );
-        const deepLink = `https://ro.blox.com/Ebh5?is_retargeting=false&pid=experiencestart_mobileweb&af_dp=${inner}&af_web_dp=${inner}&deep_link_value=${inner}`;
-        sendResponse({ success: true, deepLink });
-      } catch (err) {
-        sendResponse({ success: false, error: err.message });
-      }
-    })();
     return true;
   }
 

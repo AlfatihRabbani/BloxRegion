@@ -275,7 +275,9 @@
 			} catch (e) { resolve(null); }
 		});
 	}
-	const runInPage = code => sendMsg({ action: 'injectScript', codeToInject: code });
+	// Runs one of the background script's fixed page functions (csrf, join, follow) in the
+	// page itself, where Roblox's own scripts live.
+	const pageCall = (call, ...args) => sendMsg({ action: 'brPage', call, args });
 
 	function h(tag, props, ...kids) {
 		const el = document.createElement(tag);
@@ -731,18 +733,9 @@
 		const meta = document.querySelector('meta[name="csrf-token"]');
 		return meta ? (meta.getAttribute('data-token') || meta.getAttribute('content') || null) : null;
 	}
-	function readMainWorldCsrf() {
-		return new Promise(resolve => {
-			const code = "try{var t=(window.Roblox&&Roblox.XsrfToken&&Roblox.XsrfToken.getToken&&Roblox.XsrfToken.getToken())||'';var d=document.getElementById('__br_xsrf')||document.createElement('div');d.id='__br_xsrf';d.setAttribute('data-token',t);d.style.display='none';document.documentElement.appendChild(d);}catch(e){}";
-			runInPage(code).then(() => {
-				setTimeout(() => {
-					const el = document.getElementById('__br_xsrf');
-					const token = el ? el.getAttribute('data-token') : null;
-					if (el) el.remove();
-					resolve(token || null);
-				}, 60);
-			});
-		});
+	async function readMainWorldCsrf() {
+		const res = await pageCall('csrf');
+		return res && res.success && typeof res.result === 'string' && res.result ? res.result : null;
 	}
 	let csrfPending = null;
 	async function getCsrf() {
@@ -1411,7 +1404,7 @@
 
 	function joinServer(serverId, code, targetPlaceId = placeId) {
 		pauseForLaunch(15000);
-		runInPage(`(function(){try{var L=window.Roblox&&Roblox.GameLauncher;if(L&&L.joinGameInstance){L.joinGameInstance(${Number(targetPlaceId)},${JSON.stringify(String(serverId))});}}catch(e){}})();`);
+		pageCall('join', Number(targetPlaceId), String(serverId));
 		toast(code ? 'Launching Roblox · ' + regionTitle(code) : 'Launching Roblox…', 'play');
 		setTimeout(closeWindow, 500);
 	}
@@ -1419,7 +1412,7 @@
 	// Roblox's own "join friend" flow, which also handles friends whose server is hidden.
 	function followFriend(friend) {
 		pauseForLaunch(15000);
-		runInPage(`(function(){try{var L=window.Roblox&&Roblox.GameLauncher;if(L&&L.followPlayerIntoGame){L.followPlayerIntoGame(${Number(friend.id)});}}catch(e){}})();`);
+		pageCall('follow', Number(friend.id));
 		toast('Joining ' + (friend.displayName || friend.name) + '…', 'people');
 		setTimeout(closeWindow, 500);
 	}
