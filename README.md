@@ -124,11 +124,10 @@ To submit an existing release again, open the Actions tab, select **Publish to F
 ├── background.js        # dNR rules, geo lookups, game launcher
 ├── regionSelector.js    # scanner, launcher button and window
 ├── bloxregion.css       # Liquid Glass styles
-├── viewport.js          # ViewPort window (+ viewport.css)
-├── avatar3d.js          # 3D avatar loader and WebGL renderer
 ├── .github/workflows/
 │   ├── lint.yml             # add-on linter on every push and pull request
-│   └── publish-firefox.yml  # GitHub release → Firefox Add-ons
+│   ├── publish-firefox.yml  # GitHub release → Firefox Add-ons
+│   └── release-notes.yml    # rewrite or delete past releases' notes (run by hand)
 ├── json/
 │   └── rules.json       # static dNR rule (UA / Origin / Referer)
 ├── icons/               # extension icons

@@ -2,32 +2,14 @@
 
 ## 2.4.1
 
-- **ViewPort: textures, for real this time** — 2.4 still drew avatars in plain
-  colours, because Firefox wouldn't let the add-on hand its texture images to
-  the 3D view. Textures are now decoded straight from the downloaded files,
-  which Firefox accepts, so shirts, faces, hair and accessories show up.
-- **ViewPort: the head leads** — the head turns and nods toward the cursor
-  while the body only turns a little, like the player in Minecraft's
-  inventory. The neck twists smoothly, so nothing looks cut off.
-- **ViewPort: no freeze between pages** — your 3D avatar is now kept ready to
-  draw, so on a new page it carries on following the cursor almost at once,
-  instead of sitting still while it's downloaded and rebuilt. Every ten minutes
-  or so BloxRegion checks with Roblox whether you've changed your avatar.
+- Bug fixes and small improvements.
 
 ## 2.4
 
-- **ViewPort: textures** — shirts, faces, hair and accessories now show their
-  textures instead of plain colours.
-- **ViewPort: turns as one** — head, torso and arms turn toward the cursor
-  together, so nothing looks cut off at the neck.
-- **ViewPort: stays put between pages** — it appears the moment a page starts
-  loading, showing your avatar as you left it, and carries on live once the
-  page is ready, instead of reloading each time.
+- Bug fixes and small improvements.
 
 ## 2.3
 
-- There's something new hiding in the search field. It follows you around
-  roblox.com once you find it.
 - **Fixed: region lists missing their last servers** — when a scan finished
   while a region was open, the servers found in its last moments could stay
   out of the list (and its count) until something else changed. They now
