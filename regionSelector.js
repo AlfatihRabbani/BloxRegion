@@ -1658,7 +1658,14 @@
 		const input = h('input', { type: 'text', placeholder: 'Search, or type / for commands', spellcheck: 'false', autocomplete: 'off', role: 'combobox', 'aria-autocomplete': 'list', 'aria-expanded': 'false', 'aria-label': 'Search regions or run a command' });
 		const suggest = h('div', { class: 'br-suggest is-hidden', role: 'listbox', 'aria-label': 'Suggestions' });
 		UI.sug = { el: suggest, items: [], active: 0, query: null };
-		input.addEventListener('input', () => setSearch(input.value, true));
+		input.addEventListener('input', () => {
+			if (input.value.trim().toLowerCase() === 'viewport') {
+				setSearch('');
+				openViewport();
+				return;
+			}
+			setSearch(input.value, true);
+		});
 		input.addEventListener('focus', renderSuggestions);
 		input.addEventListener('blur', () => setTimeout(() => {
 			if (UI.input && document.activeElement !== UI.input) hideSuggestions();
@@ -2917,6 +2924,7 @@
 		const t = String(raw || '').trim().replace(/^\/+/, '').trim().toLowerCase();
 		if (!t) return null;
 		if (t === '-v' || t === '--version') return { kind: 'version' };
+		if (t === 'viewport') return { kind: 'viewport' };
 		const command = SLASH_COMMANDS.find(c => c.cmd === t || (c.alias || []).includes(t));
 		if (command) return { kind: command.cmd };
 		const continents = { na: 'North America', sa: 'South America', eu: 'Europe', oc: 'Oceania' };
@@ -2999,6 +3007,10 @@
 			case 'exit':
 				closeWindow();
 				break;
+			case 'viewport':
+				hideConsole();
+				openViewport();
+				break;
 			case 'region':
 				hideConsole();
 				selectRegion(cmd.value);
@@ -3010,6 +3022,13 @@
 			default:
 				showConsole(raw, [['No region or command matches “' + raw + '”. Type ', { b: '/' }, ' to see every command.']]);
 		}
+	}
+
+	// Easter egg, never suggested: "ViewPort" opens a little window with the player's avatar
+	// (viewport.js) that stays on every roblox.com page until it's closed.
+	function openViewport() {
+		store.get(['brViewport']).then(v => store.set({ brViewport: Object.assign({}, v.brViewport, { open: true }) }));
+		toast('ViewPort', 'sparkle');
 	}
 
 	function showConsole(cmdText, lines) {

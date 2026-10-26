@@ -24,10 +24,12 @@
         "*://*.roblox.com/*"
       ],
       "js": [
+        "viewport.js",
         "regionSelector.js"
       ],
       "css": [
-        "bloxregion.css"
+        "bloxregion.css",
+        "viewport.css"
       ],
       "run_at": "document_end",
       "all_frames": false

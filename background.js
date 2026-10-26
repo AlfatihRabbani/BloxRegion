@@ -79,18 +79,19 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   }
 });
 
-// After an update, open game pages still show the old version's button, which no longer
-// responds. Firefox may already have run the new content script there; where it hasn't,
-// run it now rather than reloading pages the player has open (they may be mid-launch).
+// After an update, open Roblox pages still show the old version's button and ViewPort,
+// which no longer respond. Firefox may already have run the new content scripts there;
+// where it hasn't, run them now rather than reloading pages the player has open (they
+// may be mid-launch).
 async function brAttachToOpenTabs() {
   let tabs = [];
-  try { tabs = await chrome.tabs.query({ url: '*://www.roblox.com/*games/*' }); } catch (e) { return; }
+  try { tabs = await chrome.tabs.query({ url: '*://*.roblox.com/*' }); } catch (e) { return; }
   for (const tab of tabs) {
-    const running = await chrome.tabs.sendMessage(tab.id, { action: 'brWindowOpen?' }).then(() => true, () => false);
+    const running = await chrome.tabs.sendMessage(tab.id, { action: 'brAlive?' }).then(r => !!(r && r.alive), () => false);
     if (running) continue;
     try {
-      await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ['bloxregion.css'] });
-      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['regionSelector.js'] });
+      await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ['bloxregion.css', 'viewport.css'] });
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['viewport.js', 'regionSelector.js'] });
     } catch (e) {}
   }
 }

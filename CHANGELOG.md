@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- There's something new hiding in the search field. It follows you around
+  roblox.com once you find it.
 - **Fixed: region lists missing their last servers** — when a scan finished
   while a region was open, the servers found in its last moments could stay
   out of the list (and its count) until something else changed. They now
