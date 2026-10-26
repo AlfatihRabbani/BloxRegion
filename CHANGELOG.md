@@ -8,6 +8,12 @@
   while a region was open, the servers found in its last moments could stay
   out of the list (and its count) until something else changed. They now
   always show up.
+- **Snappier window** — opening BloxRegion, switching regions and `/list` do
+  far less work: flags are drawn once and shared instead of rebuilt from
+  dozens of shapes in every row and card, the window is laid out once per
+  click instead of several times, animations no longer blur (which Firefox
+  has to repaint every frame), and `/list` fades in line by line. Hovering
+  cards and the counting stats while scanning are cheaper too.
 - **Lighter in big games** — an open region builds cards only for what's on
   screen plus what you scroll into, instead of every server it finds. After
   a refresh in a busy region, that's a few dozen cards and avatar lookups

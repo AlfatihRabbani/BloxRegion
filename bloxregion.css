@@ -6,6 +6,19 @@
 
 /* ---------- Design tokens ------------------------------------------------ */
 
+/* The pointer position for the glass highlight. Not inherited, so moving the pointer
+   restyles only the element it's set on (and the pseudo-element that reads it). */
+@property --br-mx {
+	syntax: '<length-percentage>';
+	inherits: false;
+	initial-value: 50%;
+}
+@property --br-my {
+	syntax: '<length-percentage>';
+	inherits: false;
+	initial-value: -40%;
+}
+
 .br-scope {
 	--br-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
 	--br-font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -167,7 +180,9 @@
 	position: absolute;
 	inset: 0;
 	border-radius: inherit;
-	background: radial-gradient(120px circle at var(--mx, 50%) var(--my, 0%), rgba(255, 255, 255, 0.22), transparent 60%);
+	--br-mx: inherit;
+	--br-my: inherit;
+	background: radial-gradient(120px circle at var(--br-mx) var(--br-my), rgba(255, 255, 255, 0.22), transparent 60%);
 	opacity: 0;
 	transition: opacity 240ms ease;
 	pointer-events: none;
@@ -600,6 +615,8 @@
 	color: var(--br-text);
 	text-align: left;
 	transition: transform var(--br-spring-dur) var(--br-spring), opacity 380ms var(--br-ease-out), background-color 160ms ease;
+	/* Counts change many times a second while scanning; keep that layout inside the row. */
+	contain: layout style;
 }
 #br-root .br-row:hover {
 	background: var(--br-fill);
@@ -679,7 +696,7 @@
 	color: var(--br-text);
 }
 #br-root .br-count.is-bump {
-	animation: br-bump 520ms var(--br-bouncy);
+	animation: br-bump 520ms var(--br-bouncy) both;
 }
 @keyframes br-bump {
 	0% { transform: scale(1); }
@@ -862,7 +879,7 @@
 	animation: br-title-in 460ms var(--br-ease-out) both;
 }
 @keyframes br-title-in {
-	from { opacity: 0; transform: translateY(6px); filter: blur(4px); }
+	from { opacity: 0; transform: translateY(6px); }
 }
 
 #br-root .br-tools {
@@ -1347,7 +1364,9 @@
 	position: absolute;
 	inset: 0;
 	border-radius: inherit;
-	background: radial-gradient(260px circle at var(--mx, 50%) var(--my, -40%), rgba(255, 255, 255, 0.12), transparent 55%);
+	--br-mx: inherit;
+	--br-my: inherit;
+	background: radial-gradient(260px circle at var(--br-mx) var(--br-my), rgba(255, 255, 255, 0.12), transparent 55%);
 	opacity: 0;
 	transition: opacity 300ms ease;
 	pointer-events: none;
@@ -1356,7 +1375,7 @@
 	opacity: 1;
 }
 #br-root.br-light .br-shine::after {
-	background: radial-gradient(260px circle at var(--mx, 50%) var(--my, -40%), rgba(255, 255, 255, 0.7), transparent 55%);
+	background: radial-gradient(260px circle at var(--br-mx) var(--br-my), rgba(255, 255, 255, 0.7), transparent 55%);
 }
 
 #br-root .br-card-top {
@@ -1418,17 +1437,16 @@
 	overflow: hidden;
 	flex: none;
 }
+/* Avatars fade in with opacity only: a server list loads dozens at once. */
 #br-root .br-av img {
 	width: 100%;
 	height: 100%;
 	object-fit: cover;
 	opacity: 0;
-	transform: scale(1.08);
-	transition: opacity 360ms ease, transform 500ms var(--br-ease-out);
+	transition: opacity 300ms ease;
 }
 #br-root .br-av img.is-loaded {
 	opacity: 1;
-	transform: none;
 }
 #br-root .br-av.is-more {
 	display: grid;
@@ -1508,10 +1526,11 @@
 	box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.18), 0 1px 2px rgba(0, 0, 0, 0.18);
 	position: relative;
 }
-#br-root .br-flag svg {
+#br-root .br-flag img {
 	display: block;
 	width: 100%;
 	height: 100%;
+	object-fit: cover;
 }
 #br-root .br-flag.is-lg {
 	width: 40px;
@@ -1596,13 +1615,16 @@
 #br-root .br-line a:hover {
 	text-decoration: underline;
 }
+#br-root .br-w,
+#br-root .br-line.is-in {
+	animation: br-word-in 460ms var(--br-ease-out) both;
+}
 #br-root .br-w {
 	display: inline-block;
 	white-space: pre;
-	animation: br-word-in 460ms var(--br-ease-out) both;
 }
 @keyframes br-word-in {
-	from { opacity: 0; filter: blur(5px); transform: translateY(3px); }
+	from { opacity: 0; transform: translateY(3px); }
 }
 
 /* ---------- Toast -------------------------------------------------------- */
@@ -1782,7 +1804,7 @@
 	background: color-mix(in srgb, var(--br-accent) 20%, transparent);
 	color: var(--br-accent-text);
 	flex: none;
-	animation: br-bump 520ms var(--br-bouncy);
+	animation: br-bump 520ms var(--br-bouncy) both;
 }
 #br-root .br-row-friend svg.br-icon {
 	width: 12px;

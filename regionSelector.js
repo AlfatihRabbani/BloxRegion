@@ -253,7 +253,8 @@
 	const setText = (el, text) => {
 		if (el.textContent !== text) el.textContent = text;
 	};
-	const fmt = n => (n || 0).toLocaleString('en-US');
+	const NUMBER = new Intl.NumberFormat('en-US');
+	const fmt = n => NUMBER.format(n || 0);
 
 	const store = {
 		get(keys) {
@@ -327,13 +328,19 @@
 	};
 	const FILLED_ICONS = new Set(['play', 'star']);
 
+	// Built once per name, then cloned.
+	const iconTemplates = new Map();
 	function icon(name) {
-		const filled = FILLED_ICONS.has(name);
-		const svg = svgEl('svg', filled
-			? { viewBox: '0 0 24 24', class: 'br-icon is-filled', fill: 'currentColor', 'aria-hidden': 'true' }
-			: { viewBox: '0 0 24 24', class: 'br-icon', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-		for (const [tag, attrs] of ICONS[name] || []) svg.appendChild(svgEl(tag, attrs));
-		return svg;
+		let svg = iconTemplates.get(name);
+		if (!svg) {
+			const filled = FILLED_ICONS.has(name);
+			svg = svgEl('svg', filled
+				? { viewBox: '0 0 24 24', class: 'br-icon is-filled', fill: 'currentColor', 'aria-hidden': 'true' }
+				: { viewBox: '0 0 24 24', class: 'br-icon', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+			for (const [tag, attrs] of ICONS[name] || []) svg.appendChild(svgEl(tag, attrs));
+			iconTemplates.set(name, svg);
+		}
+		return svg.cloneNode(true);
 	}
 
 	// Flags are drawn as inline SVG (Roblox's CSP blocks third-party flag images).
@@ -411,14 +418,53 @@
 		NG: V3('#008751', '#fff', '#008751')
 	};
 
+	// Each flag is drawn once into a small PNG (Roblox's CSP allows data: images, not
+	// third-party flag images); every copy is a single <img> sharing one decoded image,
+	// instead of an inline SVG of up to thirty shapes in each sidebar row and server card.
+	const flagUrls = new Map();
+	function flagUrl(cc) {
+		let url = flagUrls.get(cc);
+		if (url) return url;
+		// 4× the shapes' 30×20 box: sharp at every flag size, even on high-DPI screens.
+		const canvas = document.createElement('canvas');
+		canvas.width = 120;
+		canvas.height = 80;
+		const ctx = canvas.getContext('2d');
+		ctx.scale(4, 4);
+		for (const [tag, a] of FLAGS[cc]) {
+			let path;
+			if (tag === 'rect') {
+				path = new Path2D();
+				path.rect(+a.x || 0, +a.y || 0, +a.width, +a.height);
+			} else if (tag === 'circle') {
+				path = new Path2D();
+				path.arc(+a.cx, +a.cy, +a.r, 0, Math.PI * 2);
+			} else if (tag === 'polygon') {
+				path = new Path2D('M' + a.points.trim().split(/\s+/).join('L') + 'Z');
+			} else {
+				path = new Path2D(a.d);
+			}
+			const fill = a.fill == null ? '#000' : a.fill;
+			if (fill !== 'none') {
+				ctx.fillStyle = fill;
+				ctx.fill(path);
+			}
+			if (a.stroke && a.stroke !== 'none') {
+				ctx.strokeStyle = a.stroke;
+				ctx.lineWidth = +a['stroke-width'] || 1;
+				ctx.stroke(path);
+			}
+		}
+		url = canvas.toDataURL('image/png');
+		flagUrls.set(cc, url);
+		return url;
+	}
+
 	function flag(code, size) {
 		const cc = String(code || '').slice(0, 2).toUpperCase();
 		const wrap = h('span', { class: 'br-flag' + (size ? ' is-' + size : ''), 'aria-hidden': 'true' });
-		const shapes = FLAGS[cc];
-		if (shapes) {
-			const svg = svgEl('svg', { viewBox: '0 0 30 20', preserveAspectRatio: 'xMidYMid slice' });
-			for (const [tag, attrs] of shapes) svg.appendChild(svgEl(tag, attrs));
-			wrap.append(svg);
+		if (FLAGS[cc]) {
+			wrap.append(h('img', { alt: '', src: flagUrl(cc), decoding: 'async' }));
 		} else {
 			let hash = 0;
 			for (const ch of cc) hash = (hash * 31 + ch.charCodeAt(0)) % 360;
@@ -470,7 +516,22 @@
 		el.style.setProperty('--br-bouncy-dur', MOTION.bouncy.ms + 'ms');
 	}
 
+	// Plays a class's CSS animation from the start again. Rewinding the animation itself
+	// avoids the forced layout of the usual remove / read offsetWidth / add trick; those
+	// animations keep their end state (fill: both) so they're still there to rewind.
 	function restartAnimation(el, cls) {
+		if (!el.classList.contains(cls)) {
+			el.classList.add(cls);
+			return;
+		}
+		const anims = el.getAnimations ? el.getAnimations().filter(a => typeof CSSAnimation !== 'undefined' && a instanceof CSSAnimation) : [];
+		if (anims.length) {
+			for (const a of anims) {
+				a.currentTime = 0;
+				a.play();
+			}
+			return;
+		}
 		el.classList.remove(cls);
 		void el.offsetWidth;
 		el.classList.add(cls);
@@ -500,8 +561,8 @@
 		const target = e.target && e.target.closest && e.target.closest('.br-shine, #br-launch');
 		if (!target) return;
 		const r = target.getBoundingClientRect();
-		target.style.setProperty('--mx', (e.clientX - r.left) + 'px');
-		target.style.setProperty('--my', (e.clientY - r.top) + 'px');
+		target.style.setProperty('--br-mx', (e.clientX - r.left) + 'px');
+		target.style.setProperty('--br-my', (e.clientY - r.top) + 'px');
 	}
 
 	// ---------------------------------------------------------------------------
@@ -2094,7 +2155,17 @@
 		positionPill(animate);
 	}
 
+	// Measures on the next frame, once the DOM changes of this click are all in, so the
+	// window is laid out once instead of after every step.
+	let pillFrame = 0, pillAnimate = false;
 	function positionPill(animate) {
+		pillAnimate = pillAnimate || animate;
+		if (!pillFrame) pillFrame = requestAnimationFrame(placePill);
+	}
+	function placePill() {
+		const animate = pillAnimate;
+		pillFrame = 0;
+		pillAnimate = false;
 		const pill = UI.pill;
 		if (!pill) return;
 		UI.pillKey = UI.selKey;
@@ -2199,7 +2270,12 @@
 		UI.bar.style.transform = `scaleX(${running ? scanProgress() : 1})`;
 	}
 
+	let segFrame = 0;
 	function placeSegThumb(animate) {
+		cancelAnimationFrame(segFrame);
+		segFrame = requestAnimationFrame(() => placeSegThumbNow(animate));
+	}
+	function placeSegThumbNow(animate) {
 		const seg = UI.seg;
 		if (!seg) return;
 		for (const [key, b] of seg.opts) {
@@ -2472,12 +2548,16 @@
 		const value = h('div', { class: 'br-tile-value', text: '0' });
 		const sub = h('div', { class: 'br-tile-sub' });
 		const el = h('div', { class: 'br-tile br-shine' }, h('div', { class: 'br-tile-label' }, icon(iconName), label), value, sub);
-		let shown = 0, target = 0, from = 0, start = 0, raf = 0;
+		let shown = 0, target = 0, from = 0, start = 0, raf = 0, wrote = 0;
 		const step = now => {
 			// rAF timestamps can predate performance.now() taken earlier in the same frame.
 			const t = Math.max(0, Math.min(1, (now - start) / 650));
 			shown = from + (target - from) * (1 - Math.pow(1 - t, 3));
-			value.textContent = fmt(Math.round(shown));
+			// About 20 updates a second reads as counting up and costs a third of every frame.
+			if (t >= 1 || now - wrote > 48) {
+				wrote = now;
+				setText(value, fmt(Math.round(shown)));
+			}
 			raf = t < 1 ? requestAnimationFrame(step) : 0;
 		};
 		return {
@@ -3061,9 +3141,11 @@
 		const closeBtn = h('button', { type: 'button', class: 'br-iconbtn br-console-close', 'aria-label': 'Dismiss' }, icon('close'));
 		closeBtn.addEventListener('click', hideConsole);
 		const card = h('div', { class: 'br-console', role: 'log' }, h('div', { class: 'br-console-head' }, h('span', { class: 'br-console-cmd', text: '› ' + cmdText }), closeBtn));
-		// Output resolves word by word, each word fading in from a soft blur.
+		// Output resolves word by word; long output (like /list) a line at a time, which is
+		// far fewer animations to run.
+		const perLine = lines.length > 12;
 		let word = 0;
-		for (const line of lines) {
+		lines.forEach((line, li) => {
 			const row = h('div', { class: 'br-line' });
 			for (const seg of line) {
 				if (seg && seg.k) {
@@ -3072,16 +3154,24 @@
 				}
 				const text = typeof seg === 'string' ? seg : (seg.a || seg.b || '');
 				const target = seg && seg.href ? h('a', { href: seg.href, target: '_blank', rel: 'noopener noreferrer' }) : seg && seg.b ? h('b') : h('span');
-				for (const part of text.split(/(\s+)/)) {
-					if (!part) continue;
-					const w = h('span', { class: 'br-w', text: part });
-					w.style.animationDelay = Math.min(word++ * 16, 900) + 'ms';
-					target.append(w);
+				if (perLine) {
+					target.append(text);
+				} else {
+					for (const part of text.split(/(\s+)/)) {
+						if (!part) continue;
+						const w = h('span', { class: 'br-w', text: part });
+						w.style.animationDelay = Math.min(word++ * 16, 900) + 'ms';
+						target.append(w);
+					}
 				}
 				row.append(target);
 			}
+			if (perLine) {
+				row.classList.add('is-in');
+				row.style.animationDelay = Math.min(li * 22, 700) + 'ms';
+			}
 			card.append(row);
-		}
+		});
 		host.append(card);
 	}
 
