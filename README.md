@@ -53,6 +53,7 @@ Press <kbd>/</kbd> anywhere in the window (or type `/` in the search field) to o
 | `/home` | Back to the overview |
 | `/list` | Every region with its server count |
 | `/version` | Show the installed version |
+| `/update` | Check for a new version |
 | `/credits` | Show credits |
 | `/contacts` | Show contact links |
 | `/exit` | Close the window |
@@ -124,11 +125,10 @@ To submit an existing release again, open the Actions tab, select **Publish to F
 ├── regionSelector.js    # scanner, launcher button and window
 ├── bloxregion.css       # Liquid Glass styles
 ├── .github/workflows/
+│   ├── lint.yml             # add-on linter on every push and pull request
 │   └── publish-firefox.yml  # GitHub release → Firefox Add-ons
 ├── json/
-│   ├── rules.json       # static dNR rule (UA / Origin / Referer)
-│   ├── regionRules.json # secondary dNR ruleset
-│   └── countries.json   # country outlines
+│   └── rules.json       # static dNR rule (UA / Origin / Referer)
 ├── icons/               # extension icons
 ├── CHANGELOG.md
 ├── README.md

@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- **Fixed: region lists missing their last servers** — when a scan finished
+  while a region was open, the servers found in its last moments could stay
+  out of the list (and its count) until something else changed. They now
+  always show up.
+- **Lighter in big games** — an open region builds cards only for what's on
+  screen plus what you scroll into, instead of every server it finds. After
+  a refresh in a busy region, that's a few dozen cards and avatar lookups
+  instead of thousands.
+- **Updates no longer reload your Roblox tabs** — when BloxRegion updates in
+  the background, open game pages switch to the new version in place.
+- Joining a server, joining a friend and reading Roblox's security token now
+  call Roblox's page functions directly instead of injecting script text into
+  the page.
+- Removed leftover code and files from older versions (an unused rule set
+  and a 157 KB country outline file), so the add-on download is smaller.
+
 ## 2.2
 
 - **Much smoother** — the window no longer uses live full-screen blur. The
