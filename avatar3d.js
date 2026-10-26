@@ -2,8 +2,8 @@
  * BloxRegion — 3D avatar for the ViewPort
  *
  * Loads the player's 3D avatar from Roblox (the OBJ, MTL and textures behind Roblox's
- * own 3D viewer) and draws it with a small WebGL renderer. The head turns toward the
- * cursor while the body turns less, like the player model in Minecraft's inventory. The
+ * own 3D viewer) and draws it with a small WebGL renderer. The avatar turns toward the
+ * cursor as one piece (head, torso and arms together), so nothing bends at the neck. The
  * last avatar loaded is kept in storage, ready for the next page. viewport.js keeps the 2D
  * bust if anything here fails.
  */
@@ -220,7 +220,8 @@
 		return b;
 	}
 
-	// Works out where the neck is, to frame head and shoulders and to turn the head on it.
+	// Works out where the neck is, to frame head and shoulders and to turn the avatar about
+	// its middle.
 	function analyse(groups) {
 		for (const g of groups) g.box = bounds(g.data);
 		const all = { min: [0, 1, 2].map(k => Math.min(...groups.map(g => g.box.min[k]))), max: [0, 1, 2].map(k => Math.max(...groups.map(g => g.box.max[k]))) };
@@ -257,7 +258,6 @@
 		return {
 			parts: groups,
 			axis: [pivot[0], pivot[2]],
-			neck, headH,
 			view: { center: [pivot[0], (bottom + top) / 2, pivot[2]], height: top - bottom },
 			headAt: (top - (neck + headH * 0.5)) / (top - bottom)
 		};
@@ -310,19 +310,13 @@
 	// Renderer
 	// ---------------------------------------------------------------------------
 
-	// The head turns further than the body. Rather than cutting the mesh at the neck (most
-	// avatars are one piece there), each vertex blends from the body's turn to the head's
-	// over a short band just below the neck, so the neck twists instead of tearing.
 	const VERT = `
 attribute vec3 aPos; attribute vec3 aNrm; attribute vec2 aUv; attribute vec4 aCol;
-uniform mat4 uViewProj; uniform mat4 uBody; uniform mat4 uHead; uniform mat3 uBodyN; uniform mat3 uHeadN;
-uniform vec2 uNeck;
+uniform mat4 uViewProj; uniform mat4 uModel; uniform mat3 uNormal;
 varying vec3 vNrm; varying vec3 vPos; varying vec2 vUv; varying vec4 vCol;
 void main() {
-	float h = smoothstep(uNeck.x, uNeck.y, aPos.y);
-	vec4 p = vec4(aPos, 1.0);
-	vec4 w = mix(uBody * p, uHead * p, h);
-	vPos = w.xyz; vNrm = mix(uBodyN * aNrm, uHeadN * aNrm, h); vUv = vec2(aUv.x, 1.0 - aUv.y); vCol = aCol;
+	vec4 w = uModel * vec4(aPos, 1.0);
+	vPos = w.xyz; vNrm = uNormal * aNrm; vUv = vec2(aUv.x, 1.0 - aUv.y); vCol = aCol;
 	gl_Position = uViewProj * w;
 }`;
 	// Like Roblox's viewer: Kd × vertex colour × texture, matte; texture alpha only cuts out
@@ -365,7 +359,7 @@ void main() {
 		if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog) || 'link');
 		const loc = {};
 		for (const a of ['aPos', 'aNrm', 'aUv', 'aCol']) loc[a] = gl.getAttribLocation(prog, a);
-		for (const u of ['uViewProj', 'uBody', 'uHead', 'uBodyN', 'uHeadN', 'uNeck', 'uMap', 'uHasMap', 'uCutout', 'uKd', 'uOpacity', 'uEye']) loc[u] = gl.getUniformLocation(prog, u);
+		for (const u of ['uViewProj', 'uModel', 'uNormal', 'uMap', 'uHasMap', 'uCutout', 'uKd', 'uOpacity', 'uEye']) loc[u] = gl.getUniformLocation(prog, u);
 		return { prog, loc };
 	}
 
@@ -461,8 +455,6 @@ void main() {
 		const eye = [center[0], center[1] + dist * 0.06, center[2] - dist];
 		const proj = M.perspective(fov, canvas.width / canvas.height, dist * 0.05, dist * 20);
 		const viewProj = M.mul(proj, M.lookAt(eye, center, [0, 1, 0]));
-		// The neck band the head's turn fades out over (see VERT).
-		const neckBand = [model.neck - model.headH * 0.14, model.neck + model.headH * 0.02];
 
 		function render(pose) {
 			if (lost) return;
@@ -476,17 +468,14 @@ void main() {
 			gl.uniform3fv(loc.uEye, eye);
 			gl.uniform1i(loc.uMap, 0);
 
-			// The body turns a little toward the cursor and breathes; the head turns the rest of
-			// the way and nods, on the neck.
+			// The whole avatar (head, torso and arms together) turns toward the cursor about
+			// its middle, and breathes.
 			const [ax, az] = model.axis;
 			const breathe = Math.sin(pose.time * 2.1) * model.view.height * 0.004;
-			const body = M.mul(M.translate(0, breathe, 0), M.about([ax, 0, az], M.rotY(pose.body * DEG)));
-			const head = M.mul(body, M.about([ax, model.neck, az], M.mul(M.rotY((pose.yaw - pose.body) * DEG), M.rotX(pose.pitch * DEG))));
-			gl.uniformMatrix4fv(loc.uBody, false, body);
-			gl.uniformMatrix4fv(loc.uHead, false, head);
-			gl.uniformMatrix3fv(loc.uBodyN, false, M.normal3(body));
-			gl.uniformMatrix3fv(loc.uHeadN, false, M.normal3(head));
-			gl.uniform2fv(loc.uNeck, neckBand);
+			const turn = M.about([ax, model.view.center[1], az], M.mul(M.rotY(pose.yaw * DEG), M.rotX(pose.pitch * DEG)));
+			const m = M.mul(M.translate(0, breathe, 0), turn);
+			gl.uniformMatrix4fv(loc.uModel, false, m);
+			gl.uniformMatrix3fv(loc.uNormal, false, M.normal3(m));
 
 			for (const item of items) {
 				gl.uniform3fv(loc.uKd, item.kd);
@@ -613,6 +602,11 @@ void main() {
 		} catch (e) {}
 	}
 
+	// Drops the kept avatar, so the next load asks Roblox for the current one.
+	function forget() {
+		try { chrome.storage.local.remove(CACHE_KEY); } catch (e) {}
+	}
+
 	// Whether `canvas` can draw the avatar (asked the same way the renderer asks, so it's the
 	// same context).
 	function supported(canvas) {
@@ -630,5 +624,5 @@ void main() {
 		return decodeImage(await res.arrayBuffer());
 	}
 
-	window.__brAvatar3d = { load, recall, remember, modelUrl, createRenderer, supported, fetchImage };
+	window.__brAvatar3d = { load, recall, remember, forget, modelUrl, createRenderer, supported, fetchImage };
 })();
