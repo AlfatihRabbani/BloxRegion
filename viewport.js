@@ -533,7 +533,7 @@
 		// flat one turns its head further than its body.
 		const f = Math.atan((e.clientX - V.pivot.x) / 90);
 		const g = Math.atan((e.clientY - V.pivot.y) / 90);
-		const k = V.r3d ? [36, 12, 0] : [22, 12, 8];
+		const k = V.r3d ? [36, 7, 0] : [22, 12, 8];
 		V.target.yaw = f * k[0];
 		V.target.pitch = -g * k[1];
 		V.target.body = f * k[2];

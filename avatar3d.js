@@ -220,12 +220,23 @@
 		return b;
 	}
 
-	// Works out where the neck is, to frame head and shoulders and to turn the avatar about
-	// its middle.
+	// Works out where the neck is, to frame head and shoulders, and where the legs start,
+	// to turn everything above them.
 	function analyse(groups) {
 		for (const g of groups) g.box = bounds(g.data);
 		const all = { min: [0, 1, 2].map(k => Math.min(...groups.map(g => g.box.min[k]))), max: [0, 1, 2].map(k => Math.max(...groups.map(g => g.box.max[k]))) };
 		const height = all.max[1] - all.min[1];
+		// How wide the avatar is at each height.
+		const bins = 96, lo = new Array(bins).fill(Infinity), hi = new Array(bins).fill(-Infinity);
+		const binOf = y => Math.max(0, Math.min(bins - 1, Math.floor((y - all.min[1]) / height * bins)));
+		for (const g of groups) {
+			for (let i = 0; i < g.data.length; i += STRIDE) {
+				const b = binOf(g.data[i + 1]);
+				lo[b] = Math.min(lo[b], g.data[i]);
+				hi[b] = Math.max(hi[b], g.data[i]);
+			}
+		}
+		const width = b => hi[b] - lo[b]; // -Infinity where a slice has no vertices
 		const named = groups.filter(g => /(^|[^a-z])head\d*$/i.test(g.name));
 		let neck, headBox;
 		if (named.length) {
@@ -233,18 +244,9 @@
 			headBox = { min: [0, 1, 2].map(k => Math.min(...named.map(g => g.box.min[k]))), max: [0, 1, 2].map(k => Math.max(...named.map(g => g.box.max[k]))) };
 		} else {
 			// Unnamed parts: the neck is the narrowest slice between the shoulders and the head.
-			const bins = 96, lo = new Array(bins).fill(Infinity), hi = new Array(bins).fill(-Infinity);
-			for (const g of groups) {
-				for (let i = 0; i < g.data.length; i += STRIDE) {
-					const b = Math.min(bins - 1, Math.floor((g.data[i + 1] - all.min[1]) / height * bins));
-					lo[b] = Math.min(lo[b], g.data[i]);
-					hi[b] = Math.max(hi[b], g.data[i]);
-				}
-			}
 			let best = -1;
 			for (let b = Math.floor(bins * 0.55); b < Math.floor(bins * 0.9); b++) {
-				const w = hi[b] - lo[b];
-				if (w > 0 && (best < 0 || w < hi[best] - lo[best])) best = b;
+				if (width(b) > 0 && (best < 0 || width(b) < width(best))) best = b;
 			}
 			neck = all.min[1] + height * (best < 0 ? 0.78 : best / bins);
 			const top = Math.min(all.max[1], neck + height * 0.25);
@@ -253,11 +255,21 @@
 		const headH = Math.max(headBox.max[1] - neck, height * 0.08);
 		const pivot = [(headBox.min[0] + headBox.max[0]) / 2, neck, (headBox.min[2] + headBox.max[2]) / 2];
 
+		// The legs stand still below the hands, so the arms turn with the torso: the lowest
+		// slice (above the feet) about as wide as the shoulders with the arms beside them.
+		const neckBin = binOf(neck);
+		let shoulders = 0;
+		for (let b = Math.floor(neckBin * 0.75); b < neckBin; b++) shoulders = Math.max(shoulders, width(b));
+		let hands = neckBin;
+		for (let b = neckBin - 1; b >= Math.floor(bins * 0.2); b--) if (shoulders > 0 && width(b) >= shoulders * 0.8) hands = b;
+		const hips = all.min[1] + height * hands / bins;
+
 		// Head and shoulders, like the inventory view: from mid-chest to just over the head.
 		const bottom = neck - headH * 1.1, top = neck + headH * 1.35;
 		return {
 			parts: groups,
 			axis: [pivot[0], pivot[2]],
+			hips: [hips, height * 0.06],
 			view: { center: [pivot[0], (bottom + top) / 2, pivot[2]], height: top - bottom },
 			headAt: (top - (neck + headH * 0.5)) / (top - bottom)
 		};
@@ -310,13 +322,17 @@
 	// Renderer
 	// ---------------------------------------------------------------------------
 
+	// Everything from the hips up (uModel) turns as one piece; the legs stand still, and
+	// blend into the turn over a short band under the hands rather than tearing from it.
 	const VERT = `
 attribute vec3 aPos; attribute vec3 aNrm; attribute vec2 aUv; attribute vec4 aCol;
-uniform mat4 uViewProj; uniform mat4 uModel; uniform mat3 uNormal;
+uniform mat4 uViewProj; uniform mat4 uModel; uniform mat3 uNormal; uniform vec2 uHips;
 varying vec3 vNrm; varying vec3 vPos; varying vec2 vUv; varying vec4 vCol;
 void main() {
-	vec4 w = uModel * vec4(aPos, 1.0);
-	vPos = w.xyz; vNrm = uNormal * aNrm; vUv = vec2(aUv.x, 1.0 - aUv.y); vCol = aCol;
+	float t = smoothstep(uHips.x - uHips.y, uHips.x, aPos.y);
+	vec4 p = vec4(aPos, 1.0);
+	vec4 w = mix(p, uModel * p, t);
+	vPos = w.xyz; vNrm = mix(aNrm, uNormal * aNrm, t); vUv = vec2(aUv.x, 1.0 - aUv.y); vCol = aCol;
 	gl_Position = uViewProj * w;
 }`;
 	// Like Roblox's viewer: Kd × vertex colour × texture, matte; texture alpha only cuts out
@@ -359,7 +375,7 @@ void main() {
 		if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog) || 'link');
 		const loc = {};
 		for (const a of ['aPos', 'aNrm', 'aUv', 'aCol']) loc[a] = gl.getAttribLocation(prog, a);
-		for (const u of ['uViewProj', 'uModel', 'uNormal', 'uMap', 'uHasMap', 'uCutout', 'uKd', 'uOpacity', 'uEye']) loc[u] = gl.getUniformLocation(prog, u);
+		for (const u of ['uViewProj', 'uModel', 'uNormal', 'uHips', 'uMap', 'uHasMap', 'uCutout', 'uKd', 'uOpacity', 'uEye']) loc[u] = gl.getUniformLocation(prog, u);
 		return { prog, loc };
 	}
 
@@ -468,14 +484,15 @@ void main() {
 			gl.uniform3fv(loc.uEye, eye);
 			gl.uniform1i(loc.uMap, 0);
 
-			// The whole avatar (head, torso and arms together) turns toward the cursor about
-			// its middle, and breathes.
+			// Head, torso and arms turn together toward the cursor, leaning from the hips, and
+			// breathe; the legs stay where they stand.
 			const [ax, az] = model.axis;
 			const breathe = Math.sin(pose.time * 2.1) * model.view.height * 0.004;
-			const turn = M.about([ax, model.view.center[1], az], M.mul(M.rotY(pose.yaw * DEG), M.rotX(pose.pitch * DEG)));
+			const turn = M.about([ax, model.hips[0], az], M.mul(M.rotY(pose.yaw * DEG), M.rotX(pose.pitch * DEG)));
 			const m = M.mul(M.translate(0, breathe, 0), turn);
 			gl.uniformMatrix4fv(loc.uModel, false, m);
 			gl.uniformMatrix3fv(loc.uNormal, false, M.normal3(m));
+			gl.uniform2fv(loc.uHips, model.hips);
 
 			for (const item of items) {
 				gl.uniform3fv(loc.uKd, item.kd);
@@ -578,7 +595,7 @@ void main() {
 	// the next page draws it from there at once instead of downloading and parsing it again
 	// while the page itself is loading. (Firefox stores typed arrays as they are.)
 	const CACHE_KEY = 'brAvatar3d';
-	const CACHE_FORMAT = 1;
+	const CACHE_FORMAT = 2;
 
 	// The kept avatar if it's this player's: { url, model, recalled: true }, or null.
 	function recall(userId) {
