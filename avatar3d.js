@@ -2,10 +2,10 @@
  * BloxRegion — 3D avatar for the ViewPort
  *
  * Loads the player's 3D avatar from Roblox (the OBJ, MTL and textures behind Roblox's
- * own 3D viewer) and draws it with a small WebGL renderer. The avatar turns toward the
- * cursor as one piece (head, torso and arms together), so nothing bends at the neck. The
- * last avatar loaded is kept in storage, ready for the next page. viewport.js keeps the 2D
- * bust if anything here fails.
+ * own 3D viewer) and draws it with a small WebGL renderer, posed like the player in
+ * Minecraft's inventory: the head looks at the cursor, the body turns part of the way and
+ * the legs stay planted, each piece moving whole. The last avatar loaded is kept in
+ * storage, ready for the next page. viewport.js keeps the 2D bust if anything here fails.
  */
 (() => {
 	'use strict';
@@ -115,12 +115,35 @@
 	// Triangles grouped by object and material, interleaved as
 	// position (3), normal (3), uv (2), colour (4). Works in short slices so a big avatar
 	// never holds up the page.
+	//
+	// Each triangle also gets the piece it belongs to: the connected mesh (head, hair, an
+	// arm...), with vertices at the same spot counted as one, since files often repeat them
+	// along seams and hard edges.
 	const STRIDE = 12;
 	async function parseObj(text) {
 		const P = [], N = [], T = [], C = [];
 		const groups = new Map();
 		let name = '', material = '', group = null, hasAlpha = false;
 		const corner = [];
+		const spot = new Map(), spotOf = [], parent = [];
+		const find = i => {
+			while (parent[i] !== i) i = parent[i] = parent[parent[i]];
+			return i;
+		};
+		const weld = v => {
+			if (spotOf[v] === undefined) {
+				// To the millimetre, packed into one exact number (±65 studs on each axis).
+				const q = k => Math.min(131071, Math.max(0, Math.round(P[v * 3 + k] * 1000) + 65536));
+				const key = (q(0) * 131072 + q(1)) * 131072 + q(2);
+				let id = spot.get(key);
+				if (id === undefined) {
+					spot.set(key, id = parent.length);
+					parent.push(id);
+				}
+				spotOf[v] = id;
+			}
+			return spotOf[v];
+		};
 		let pos = 0, lines = 0, deadline = performance.now() + 8;
 		while (pos < text.length) {
 			let end = text.indexOf('\n', pos);
@@ -158,7 +181,7 @@
 				if (!group) {
 					const key = name + '\u0000' + material;
 					group = groups.get(key);
-					if (!group) groups.set(key, group = { name, material, data: [], alpha: false });
+					if (!group) groups.set(key, group = { name, material, data: [], pieces: [], alpha: false });
 				}
 				const toks = line.slice(2).trim().split(/\s+/);
 				corner.length = 0;
@@ -170,11 +193,33 @@
 					n = Number.isNaN(n) ? -1 : n < 0 ? N.length / 3 + n : n - 1;
 					corner.push(v, t, n);
 				}
-				for (let k = 1; k + 1 < corner.length / 3; k++) emit(group, P, N, T, C, corner, 0, k, k + 1);
+				if (corner[0] < 0 || corner[0] * 3 + 2 >= P.length) continue;
+				const root = find(weld(corner[0]));
+				for (let k = 3; k < corner.length; k += 3) {
+					if (corner[k] >= 0 && corner[k] * 3 + 2 < P.length) {
+						const other = find(weld(corner[k]));
+						if (other !== root) parent[other] = find(root);
+					}
+				}
+				for (let k = 1; k + 1 < corner.length / 3; k++) {
+					emit(group, P, N, T, C, corner, 0, k, k + 1);
+					group.pieces.push(spotOf[corner[0]]);
+				}
 				if (hasAlpha) for (let k = 0; k < corner.length; k += 3) if (C[corner[k] * 4 + 3] < 1) group.alpha = true;
 			}
 		}
-		return [...groups.values()].filter(g => g.data.length).map(g => ({ name: g.name, material: g.material, alpha: g.alpha, data: new Float32Array(g.data) }));
+		// Pieces numbered 0, 1, 2... across all groups.
+		const number = new Int32Array(parent.length).fill(-1);
+		let pieces = 0;
+		const pieceOf = p => {
+			const root = find(p);
+			if (number[root] < 0) number[root] = pieces++;
+			return number[root];
+		};
+		return [...groups.values()].filter(g => g.data.length).map(g => ({
+			name: g.name, material: g.material, alpha: g.alpha, data: new Float32Array(g.data),
+			pieces: Int32Array.from(g.pieces, pieceOf)
+		}));
 	}
 
 	// One triangle, with a flat normal where the file has none.
@@ -220,22 +265,30 @@
 		return b;
 	}
 
-	// Works out where the neck is, to frame head and shoulders, and where the legs start,
-	// to turn everything above them.
-	function analyse(groups) {
+	// Which way each piece moves: it turns with the head, turns with the body, or stays put
+	// with the legs. Pieces move whole, so nothing bends.
+	const LEGS = 0, BODY = 1, HEAD = 2;
+
+	// Works out where the neck and hips are, to frame head and shoulders and to sort the
+	// pieces into head, body and legs.
+	async function analyse(groups) {
 		for (const g of groups) g.box = bounds(g.data);
 		const all = { min: [0, 1, 2].map(k => Math.min(...groups.map(g => g.box.min[k]))), max: [0, 1, 2].map(k => Math.max(...groups.map(g => g.box.max[k]))) };
 		const height = all.max[1] - all.min[1];
 		// How wide the avatar is at each height.
 		const bins = 96, lo = new Array(bins).fill(Infinity), hi = new Array(bins).fill(-Infinity);
 		const binOf = y => Math.max(0, Math.min(bins - 1, Math.floor((y - all.min[1]) / height * bins)));
+		const perBin = bins / height;
 		for (const g of groups) {
-			for (let i = 0; i < g.data.length; i += STRIDE) {
-				const b = binOf(g.data[i + 1]);
-				lo[b] = Math.min(lo[b], g.data[i]);
-				hi[b] = Math.max(hi[b], g.data[i]);
+			const d = g.data;
+			for (let i = 0; i < d.length; i += STRIDE) {
+				let b = ((d[i + 1] - all.min[1]) * perBin) | 0;
+				if (b >= bins) b = bins - 1;
+				if (d[i] < lo[b]) lo[b] = d[i];
+				if (d[i] > hi[b]) hi[b] = d[i];
 			}
 		}
+		await sleep(0);
 		const width = b => hi[b] - lo[b]; // -Infinity where a slice has no vertices
 		const named = groups.filter(g => /(^|[^a-z])head\d*$/i.test(g.name));
 		let neck, headBox;
@@ -255,21 +308,86 @@
 		const headH = Math.max(headBox.max[1] - neck, height * 0.08);
 		const pivot = [(headBox.min[0] + headBox.max[0]) / 2, neck, (headBox.min[2] + headBox.max[2]) / 2];
 
-		// The legs stand still below the hands, so the arms turn with the torso: the lowest
-		// slice (above the feet) about as wide as the shoulders with the arms beside them.
+		// The hips: just below the hands (the lowest slice, above the feet, about as wide as
+		// the shoulders with the arms beside them), within reason.
 		const neckBin = binOf(neck);
 		let shoulders = 0;
 		for (let b = Math.floor(neckBin * 0.75); b < neckBin; b++) shoulders = Math.max(shoulders, width(b));
 		let hands = neckBin;
 		for (let b = neckBin - 1; b >= Math.floor(bins * 0.2); b--) if (shoulders > 0 && width(b) >= shoulders * 0.8) hands = b;
-		const hips = all.min[1] + height * hands / bins;
+		const below = neck - all.min[1];
+		const hips = Math.min(Math.max(all.min[1] + height * hands / bins, all.min[1] + below * 0.3), all.min[1] + below * 0.65);
+		// Where the legs are side to side: whatever is well below the hands.
+		const legs = { lo: Infinity, hi: -Infinity }, knees = all.min[1] + (hips - all.min[1]) * 0.8;
+		for (const g of groups) {
+			const d = g.data;
+			for (let i = 0; i < d.length; i += STRIDE) {
+				if (d[i + 1] < knees) {
+					if (d[i] < legs.lo) legs.lo = d[i];
+					if (d[i] > legs.hi) legs.hi = d[i];
+				}
+			}
+		}
+		await sleep(0);
+
+		// Each piece's extent: x0, x1, y0, y1.
+		let count = 0;
+		for (const g of groups) for (const piece of g.pieces) count = Math.max(count, piece + 1);
+		const box = new Float64Array(count * 4);
+		for (let k = 0; k < count; k++) box.set([Infinity, -Infinity, Infinity, -Infinity], k * 4);
+		for (const g of groups) {
+			const d = g.data;
+			for (let t = 0, i = 0; t < g.pieces.length; t++) {
+				const b = g.pieces[t] * 4;
+				for (let end = i + 3 * STRIDE; i < end; i += STRIDE) {
+					const x = d[i], y = d[i + 1];
+					if (x < box[b]) box[b] = x;
+					if (x > box[b + 1]) box[b + 1] = x;
+					if (y < box[b + 2]) box[b + 2] = y;
+					if (y > box[b + 3]) box[b + 3] = y;
+				}
+			}
+		}
+		// The head and what's on it (hair down the back too); the legs, below the hips and
+		// between the hands; everything else is the body.
+		const joint = new Uint8Array(count);
+		let heads = 0;
+		for (let k = 0; k < count; k++) {
+			const [x0, x1, y0, y1] = box.subarray(k * 4, k * 4 + 4);
+			const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+			let j = BODY;
+			if (cy >= neck || (y1 >= neck + headH * 0.5 && cy >= neck - headH * 1.2)) j = HEAD;
+			else if (cy < hips && y1 < hips + (neck - hips) * 0.5 && cx >= legs.lo && cx <= legs.hi) j = LEGS;
+			if (j === HEAD) heads++;
+			joint[k] = j;
+		}
+		await sleep(0);
+		// Each group split by where its pieces go, copying runs of triangles at a time.
+		const parts = [];
+		const T = 3 * STRIDE;
+		for (const g of groups) {
+			const size = [0, 0, 0];
+			for (const piece of g.pieces) size[joint[piece]]++;
+			const out = size.map(n => n ? new Float32Array(n * T) : null), at = [0, 0, 0];
+			for (let t = 0; t < g.pieces.length;) {
+				const j = joint[g.pieces[t]];
+				let end = t + 1;
+				while (end < g.pieces.length && joint[g.pieces[end]] === j) end++;
+				out[j].set(g.data.subarray(t * T, end * T), at[j]);
+				at[j] += (end - t) * T;
+				t = end;
+			}
+			for (const j of [LEGS, BODY, HEAD]) if (out[j]) parts.push({ name: g.name, material: g.material, alpha: g.alpha, data: out[j], joint: j });
+		}
 
 		// Head and shoulders, like the inventory view: from mid-chest to just over the head.
 		const bottom = neck - headH * 1.1, top = neck + headH * 1.35;
 		return {
-			parts: groups,
+			parts,
 			axis: [pivot[0], pivot[2]],
-			hips: [hips, height * 0.06],
+			neck,
+			// No separate head (one piece from head to body): the body turns all the way.
+			headless: !heads,
 			view: { center: [pivot[0], (bottom + top) / 2, pivot[2]], height: top - bottom },
 			headAt: (top - (neck + headH * 0.5)) / (top - bottom)
 		};
@@ -322,17 +440,13 @@
 	// Renderer
 	// ---------------------------------------------------------------------------
 
-	// Everything from the hips up (uModel) turns as one piece; the legs stand still, and
-	// blend into the turn over a short band under the hands rather than tearing from it.
 	const VERT = `
 attribute vec3 aPos; attribute vec3 aNrm; attribute vec2 aUv; attribute vec4 aCol;
-uniform mat4 uViewProj; uniform mat4 uModel; uniform mat3 uNormal; uniform vec2 uHips;
+uniform mat4 uViewProj; uniform mat4 uModel; uniform mat3 uNormal;
 varying vec3 vNrm; varying vec3 vPos; varying vec2 vUv; varying vec4 vCol;
 void main() {
-	float t = smoothstep(uHips.x - uHips.y, uHips.x, aPos.y);
-	vec4 p = vec4(aPos, 1.0);
-	vec4 w = mix(p, uModel * p, t);
-	vPos = w.xyz; vNrm = mix(aNrm, uNormal * aNrm, t); vUv = vec2(aUv.x, 1.0 - aUv.y); vCol = aCol;
+	vec4 w = uModel * vec4(aPos, 1.0);
+	vPos = w.xyz; vNrm = uNormal * aNrm; vUv = vec2(aUv.x, 1.0 - aUv.y); vCol = aCol;
 	gl_Position = uViewProj * w;
 }`;
 	// Like Roblox's viewer: Kd × vertex colour × texture, matte; texture alpha only cuts out
@@ -375,7 +489,7 @@ void main() {
 		if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog) || 'link');
 		const loc = {};
 		for (const a of ['aPos', 'aNrm', 'aUv', 'aCol']) loc[a] = gl.getAttribLocation(prog, a);
-		for (const u of ['uViewProj', 'uModel', 'uNormal', 'uHips', 'uMap', 'uHasMap', 'uCutout', 'uKd', 'uOpacity', 'uEye']) loc[u] = gl.getUniformLocation(prog, u);
+		for (const u of ['uViewProj', 'uModel', 'uNormal', 'uMap', 'uHasMap', 'uCutout', 'uKd', 'uOpacity', 'uEye']) loc[u] = gl.getUniformLocation(prog, u);
 		return { prog, loc };
 	}
 
@@ -405,15 +519,15 @@ void main() {
 			gl.bufferData(gl.ARRAY_BUFFER, part.data, gl.STATIC_DRAW);
 			const d = info.d !== undefined ? parseFloat(info.d) : 1;
 			return {
-				buf, count: part.data.length / STRIDE,
+				buf, count: part.data.length / STRIDE, joint: part.joint,
 				kd: kd.every(Number.isFinite) ? kd : [1, 1, 1],
 				map: textureHash(info.map_kd, model.textures || []),
 				cutout: info.rbx_alphamode === 'transparent' || part.alpha,
 				opacity: Number.isFinite(d) ? d : 1
 			};
 		});
-		// Opaque first, then anything see-through.
-		items.sort((a, b) => (a.opacity < 1) - (b.opacity < 1));
+		// Opaque first, then anything see-through; by joint within those, to switch less.
+		items.sort((a, b) => (a.opacity < 1) - (b.opacity < 1) || a.joint - b.joint);
 
 		let frameRequested = null;
 		const hashes = [...new Set(items.map(i => i.map).filter(Boolean))];
@@ -484,17 +598,23 @@ void main() {
 			gl.uniform3fv(loc.uEye, eye);
 			gl.uniform1i(loc.uMap, 0);
 
-			// Head, torso and arms turn together toward the cursor, leaning from the hips, and
-			// breathe; the legs stay where they stand.
+			// Like the inventory: the head looks at the cursor (turning and nodding on the neck),
+			// the body (torso and arms) turns part of the way and breathes, and the legs stay
+			// where they stand.
 			const [ax, az] = model.axis;
 			const breathe = Math.sin(pose.time * 2.1) * model.view.height * 0.004;
-			const turn = M.about([ax, model.hips[0], az], M.mul(M.rotY(pose.yaw * DEG), M.rotX(pose.pitch * DEG)));
-			const m = M.mul(M.translate(0, breathe, 0), turn);
-			gl.uniformMatrix4fv(loc.uModel, false, m);
-			gl.uniformMatrix3fv(loc.uNormal, false, M.normal3(m));
-			gl.uniform2fv(loc.uHips, model.hips);
+			const turn = model.headless ? pose.yaw : pose.body;
+			const body = M.mul(M.translate(0, breathe, 0), M.about([ax, 0, az], M.rotY(turn * DEG)));
+			const head = M.mul(body, M.about([ax, model.neck, az], M.mul(M.rotY((pose.yaw - turn) * DEG), M.rotX(pose.pitch * DEG))));
+			const joints = [M.identity(), body, head];
+			let joint = -1;
 
 			for (const item of items) {
+				if (item.joint !== joint) {
+					joint = item.joint;
+					gl.uniformMatrix4fv(loc.uModel, false, joints[joint]);
+					gl.uniformMatrix3fv(loc.uNormal, false, M.normal3(joints[joint]));
+				}
 				gl.uniform3fv(loc.uKd, item.kd);
 				const tex = item.map && textures.get(item.map);
 				gl.uniform1i(loc.uHasMap, tex ? 1 : 0);
@@ -583,7 +703,7 @@ void main() {
 		}
 		const groups = await parseObj(objText);
 		if (!groups.length) throw new Error('empty avatar');
-		const model = analyse(groups);
+		const model = await analyse(groups);
 		model.materials = materials;
 		model.textures = textures;
 		await Promise.all(fetching.values());
@@ -595,7 +715,7 @@ void main() {
 	// the next page draws it from there at once instead of downloading and parsing it again
 	// while the page itself is loading. (Firefox stores typed arrays as they are.)
 	const CACHE_KEY = 'brAvatar3d';
-	const CACHE_FORMAT = 2;
+	const CACHE_FORMAT = 3;
 
 	// The kept avatar if it's this player's: { url, model, recalled: true }, or null.
 	function recall(userId) {

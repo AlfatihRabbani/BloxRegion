@@ -1,8 +1,8 @@
 /*
  * BloxRegion — ViewPort (an easter egg)
  *
- * A small retro window with the player's avatar, which turns to follow the cursor like
- * the player in Minecraft's inventory. Typing "ViewPort" into BloxRegion's search field
+ * A small retro window with the player's avatar: the head follows the cursor and the
+ * body turns part of the way, like the player in Minecraft's inventory. Typing "ViewPort" into BloxRegion's search field
  * opens it; it then stays on every roblox.com page, wherever it was dragged, until its X
  * is pressed. The state lives in storage, so every open tab agrees.
  *
@@ -529,11 +529,11 @@
 				V.pivot = { x: r.left + r.width * V.cx, y: r.top + r.height * V.neck * 0.62 };
 			}
 		}
-		// Minecraft's inventory model: atan of the offset. The 3D avatar turns as one; the
-		// flat one turns its head further than its body.
+		// Minecraft's inventory model: atan of the offset. The head turns (and nods) further
+		// than the body.
 		const f = Math.atan((e.clientX - V.pivot.x) / 90);
 		const g = Math.atan((e.clientY - V.pivot.y) / 90);
-		const k = V.r3d ? [36, 7, 0] : [22, 12, 8];
+		const k = V.r3d ? [36, 16, 15] : [22, 12, 8];
 		V.target.yaw = f * k[0];
 		V.target.pitch = -g * k[1];
 		V.target.body = f * k[2];
