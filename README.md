@@ -53,6 +53,7 @@ Press <kbd>/</kbd> anywhere in the window (or type `/` in the search field) to o
 | `/home` | Back to the overview |
 | `/list` | Every region with its server count |
 | `/version` | Show the installed version |
+| `/update` | Install a downloaded update, or check for one |
 | `/credits` | Show credits |
 | `/contacts` | Show contact links |
 | `/exit` | Close the window |
@@ -62,13 +63,13 @@ Press <kbd>/</kbd> anywhere in the window (or type `/` in the search field) to o
 
 ## Updates
 
-BloxRegion checks GitHub and Firefox Add-ons every few hours. When there's a newer version, the globe button gets a blue dot, the sidebar shows **Update**, and the Overview shows what's new.
+BloxRegion never updates by itself. It checks GitHub and Firefox Add-ons every few hours, and when there's a newer version the globe button gets a blue dot, the sidebar shows **Update**, and the Overview shows what's new.
 
-- **Live on Firefox Add-ons:** Firefox installs it on its own, usually within a day. **Get it now** opens the listing if you don't want to wait.
-- **Downloaded while BloxRegion is open:** Firefox holds it until you click **Restart to update** or close the window.
-- **Still in Mozilla's review:** nothing to do. It installs automatically once approved.
+- **Downloaded:** Firefox fetches new versions in the background, and BloxRegion holds them. Type `/update` (or press **Update now**) to install; nothing changes until you do.
+- **Live on Firefox Add-ons, not downloaded yet:** `/update` tells you so. **Get it now** opens the listing if you don't want to wait.
+- **Still in Mozilla's review:** nothing to do yet.
 
-Type `/update` to check right away.
+Firefox itself installs a downloaded update when it restarts. To stop it downloading updates at all, turn off **Allow automatic updates** for BloxRegion in `about:addons`.
 
 ## Releasing a new version
 
@@ -81,7 +82,7 @@ Publishing a GitHub release submits it to Firefox Add-ons automatically, through
 3. Publish a GitHub release tagged `v<version>` (for example `v2.1`). The release text becomes the Firefox Add-ons release notes.
 4. The workflow checks the tag matches `manifest.json`, builds and lints the add-on, submits it to Firefox Add-ons, and attaches the zip to the release. Once Mozilla approves it, every user gets the update.
 
-To submit an existing release again, open the Actions tab, select **Publish to Firefox Add-ons**, click **Run workflow**, and enter the tag.
+To submit an existing release again, open the Actions tab, select **Publish to Firefox Add-ons**, click **Run workflow**, and enter the tag. Entering a new tag (for example `v2.3`, after bumping `manifest.json`) creates that release on the chosen branch, with its `CHANGELOG.md` section as the text, and publishes it.
 
 ## Requirements
 
@@ -123,12 +124,13 @@ To submit an existing release again, open the Actions tab, select **Publish to F
 ├── background.js        # dNR rules, geo lookups, game launcher
 ├── regionSelector.js    # scanner, launcher button and window
 ├── bloxregion.css       # Liquid Glass styles
+├── viewport.js          # ViewPort window (+ viewport.css)
+├── avatar3d.js          # 3D avatar loader and WebGL renderer
 ├── .github/workflows/
+│   ├── lint.yml             # add-on linter on every push and pull request
 │   └── publish-firefox.yml  # GitHub release → Firefox Add-ons
 ├── json/
-│   ├── rules.json       # static dNR rule (UA / Origin / Referer)
-│   ├── regionRules.json # secondary dNR ruleset
-│   └── countries.json   # country outlines
+│   └── rules.json       # static dNR rule (UA / Origin / Referer)
 ├── icons/               # extension icons
 ├── CHANGELOG.md
 ├── README.md

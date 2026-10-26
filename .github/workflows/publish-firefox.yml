@@ -8,6 +8,10 @@
 # Each release: bump "version" in manifest.json, push, then publish a release tagged
 # v<version> (e.g. v2.1). The release text becomes the AMO release notes. After Mozilla
 # approves it, Firefox updates everyone automatically.
+#
+# Or run this workflow by hand (Actions tab) with a tag that has no release yet: it
+# creates the release on the commit it runs on, with that version's CHANGELOG.md
+# section as its text, then publishes it the same way.
 
 name: Publish to Firefox Add-ons
 
@@ -34,13 +38,23 @@ jobs:
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
+      # A manual run for a version that has no release yet creates it (further down).
+      - name: Look for the release
+        id: release
+        run: |
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
         with:
-          node-version: 20
+          ref: ${{ steps.release.outputs.exists == 'true' && env.TAG || github.sha }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
 
       - name: Check the tag matches manifest.json
         id: version
@@ -61,6 +75,33 @@ jobs:
             echo "::error::Add the AMO_JWT_ISSUER and AMO_JWT_SECRET repository secrets (see the top of this workflow)."
             exit 1
           fi
+
+      # Releases made with the workflow's own token don't start this workflow again.
+      - name: Create the release from CHANGELOG.md
+        if: steps.release.outputs.exists != 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          node -e "
+            const fs = require('fs');
+            const v = process.env.VERSION;
+            const lines = fs.readFileSync('CHANGELOG.md', 'utf8').replace(/\r/g, '').split('\n');
+            const start = lines.indexOf('## ' + v);
+            if (start < 0) {
+              console.log('::error::CHANGELOG.md has no \'## ' + v + '\' section to use as the release text.');
+              process.exit(1);
+            }
+            const out = [];
+            for (const line of lines.slice(start + 1)) {
+              if (line.startsWith('## ')) break;
+              // Join wrapped bullet lines so each point is one line.
+              if (/^\s+\S/.test(line) && out.length && out[out.length - 1].trim()) out[out.length - 1] += ' ' + line.trim();
+              else out.push(line);
+            }
+            fs.writeFileSync(process.env.RUNNER_TEMP + '/notes.md', out.join('\n').trim() + '\n');
+          "
+          cat "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "BloxRegion $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
 
       - name: Write release notes for AMO
         run: |

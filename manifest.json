@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BloxRegion",
-  "version": "2.2",
+  "version": "2.3",
   "description": "Pick your Roblox server region in a Liquid Glass window, nearest servers first. Free and open source.",
   "short_name": "BloxRegion",
   "browser_specific_settings": {
@@ -24,10 +24,13 @@
         "*://*.roblox.com/*"
       ],
       "js": [
+        "avatar3d.js",
+        "viewport.js",
         "regionSelector.js"
       ],
       "css": [
-        "bloxregion.css"
+        "bloxregion.css",
+        "viewport.css"
       ],
       "run_at": "document_end",
       "all_frames": false
@@ -54,11 +57,6 @@
         "id": "ruleset_1",
         "enabled": true,
         "path": "json/rules.json"
-      },
-      {
-        "id": "ruleset_2",
-        "enabled": false,
-        "path": "json/regionRules.json"
       }
     ]
   },

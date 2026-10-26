@@ -1,0 +1,141 @@
+/* ==========================================================================
+   BloxRegion — ViewPort: a small retro window with the player's avatar.
+   Scoped to #br-viewport; it shows on every roblox.com page once opened.
+   ========================================================================== */
+
+#br-viewport {
+	position: fixed;
+	left: 16px;
+	top: 120px;
+	z-index: 2147483100;
+	width: 196px;
+	box-sizing: border-box;
+	padding: 0 5px 5px;
+	border: 1px solid #050a3c;
+	background: #1626b0;
+	box-shadow: inset 1px 1px 0 #4256e6, inset -1px -1px 0 #0b1680, 0 12px 28px rgba(0, 0, 0, 0.45);
+	user-select: none;
+	-webkit-user-select: none;
+	-webkit-tap-highlight-color: transparent;
+}
+#br-viewport.is-opening {
+	animation: brv-in 220ms steps(4, end) both;
+}
+@keyframes brv-in {
+	from { opacity: 0; transform: scale(0.85); }
+}
+@media (prefers-reduced-motion: reduce) {
+	#br-viewport.is-opening { animation: none; }
+}
+
+/* Neutralise Roblox's global element styles inside the window. */
+#br-viewport div,
+#br-viewport span,
+#br-viewport button,
+#br-viewport canvas {
+	box-sizing: border-box;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	background: none;
+	box-shadow: none;
+	min-width: 0;
+	max-width: none;
+	outline: none;
+	float: none;
+}
+
+#br-viewport .brv-bar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 6px;
+	height: 40px;
+	padding: 0 0 0 5px;
+	cursor: grab;
+	touch-action: none;
+}
+#br-viewport.is-dragging .brv-bar {
+	cursor: grabbing;
+}
+#br-viewport .brv-name {
+	display: flex;
+	align-items: center;
+	min-width: 0;
+	overflow: hidden;
+}
+#br-viewport canvas {
+	display: block;
+	image-rendering: pixelated;
+	image-rendering: crisp-edges;
+}
+
+#br-viewport .brv-close {
+	display: grid;
+	place-items: center;
+	flex: none;
+	width: 30px;
+	height: 30px;
+	background: #b6b6c0;
+	box-shadow: inset 2px 2px 0 #e9e9f1, inset -2px -2px 0 #6c6c78;
+	cursor: pointer;
+}
+#br-viewport .brv-close:hover {
+	background: #c6c6d0;
+}
+#br-viewport .brv-close:active {
+	box-shadow: inset -2px -2px 0 #e9e9f1, inset 2px 2px 0 #6c6c78;
+}
+#br-viewport .brv-close:focus-visible {
+	outline: 2px solid #fff;
+	outline-offset: 1px;
+}
+#br-viewport .brv-close canvas {
+	width: 14px;
+	height: 14px;
+}
+
+#br-viewport .brv-body {
+	position: relative;
+	height: 188px;
+	overflow: hidden;
+	background: #000;
+	box-shadow: inset 0 0 0 1px #050a3c;
+}
+#br-viewport .brv-stage {
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: 6px;
+	height: 184px;
+}
+#br-viewport .brv-stage canvas {
+	position: absolute;
+	top: 0;
+	backface-visibility: hidden;
+}
+#br-viewport .brv-head {
+	left: 0;
+	width: 184px;
+	height: 184px;
+}
+/* The 3D avatar fades in over the 2D one once it has loaded. */
+#br-viewport .brv-3d {
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 184px;
+	height: 188px;
+	opacity: 0;
+	transition: opacity 280ms steps(4, end);
+	pointer-events: none;
+}
+#br-viewport.is-3d .brv-3d {
+	opacity: 1;
+}
+/* 14 canvas px (28 CSS px) wider on each side and taller below than the frame. */
+#br-viewport .brv-torso {
+	left: -28px;
+	width: 240px;
+	height: 212px;
+}

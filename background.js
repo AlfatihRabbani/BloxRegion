@@ -1,23 +1,24 @@
-const rrLaunchGameInstance = (placeId, instanceId) => {
-  const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-  if (isMobile) {
-    const url = instanceId
-      ? `https://www.roblox.com/games/start?placeid=${placeId}&gameId=${instanceId}`
-      : `https://www.roblox.com/games/start?placeid=${placeId}`;
-    const a = document.createElement('a');
-    a.href = url; a.rel = 'noopener noreferrer';
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  } else {
+// The only things the content script runs in the page itself (MAIN world), where Roblox's
+// own scripts live. executeScript sends each function's source, so they must be
+// self-contained arrow functions.
+const BR_PAGE_CALLS = {
+  csrf: () => {
     try {
-      if (window.Roblox?.GameLauncher?.joinGameInstance) {
-        window.Roblox.GameLauncher.joinGameInstance(placeId, instanceId);
-      } else {
-        throw new Error('GameLauncher unavailable');
-      }
-    } catch (err) {
-      window.location.href = instanceId
-        ? `roblox://placeId=${placeId}&gameInstanceId=${instanceId}`
-        : `roblox://placeId=${placeId}`;
+      const x = window.Roblox && window.Roblox.XsrfToken;
+      const token = x && x.getToken && x.getToken();
+      return typeof token === 'string' && token ? token : null;
+    } catch (e) {
+      return null;
+    }
+  },
+  join: (placeId, gameId) => {
+    try {
+      const launcher = window.Roblox && window.Roblox.GameLauncher;
+      if (!launcher || !launcher.joinGameInstance) return false;
+      launcher.joinGameInstance(placeId, gameId);
+      return true;
+    } catch (e) {
+      return false;
     }
   }
 };
@@ -59,10 +60,31 @@ chrome.runtime.onInstalled.addListener(async (details) => {
       chrome.storage.local.set({ regionSelectorEnabled: true });
     }
   });
-  chrome.tabs.query({ url: '*://www.roblox.com/*games/*' }, (tabs) => {
-    for (const tab of tabs) chrome.tabs.reload(tab.id);
-  });
+  if (details.reason === 'install') {
+    chrome.tabs.query({ url: '*://www.roblox.com/*games/*' }, (tabs) => {
+      for (const tab of tabs) chrome.tabs.reload(tab.id);
+    });
+  } else if (details.reason === 'update') {
+    brAttachToOpenTabs();
+  }
 });
+
+// After an update, open Roblox pages still show the old version's button and ViewPort,
+// which no longer respond. Firefox may already have run the new content scripts there;
+// where it hasn't, run them now rather than reloading pages the player has open (they
+// may be mid-launch).
+async function brAttachToOpenTabs() {
+  let tabs = [];
+  try { tabs = await chrome.tabs.query({ url: '*://*.roblox.com/*' }); } catch (e) { return; }
+  for (const tab of tabs) {
+    const running = await chrome.tabs.sendMessage(tab.id, { action: 'brAlive?' }).then(r => !!(r && r.alive), () => false);
+    if (running) continue;
+    try {
+      await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ['bloxregion.css', 'viewport.css'] });
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['avatar3d.js', 'viewport.js', 'regionSelector.js'] });
+    } catch (e) {}
+  }
+}
 
 const rrIpRegionCache = new Map();
 const rrIpInflight = new Map();
@@ -200,30 +222,16 @@ async function brCheckForUpdate(force) {
   return { ...info, installed, state, target };
 }
 
-// Is a BloxRegion window open in any tab? (Applying an update reloads the extension.)
-async function brAnyWindowOpen() {
-  let tabs = [];
-  try { tabs = await chrome.tabs.query({}); } catch (e) { return false; }
-  const answers = await Promise.all(tabs.map(tab => Promise.race([
-    chrome.tabs.sendMessage(tab.id, { action: 'brWindowOpen?' }).then(r => !!(r && r.open)).catch(() => false),
-    new Promise(resolve => setTimeout(() => resolve(false), 400))
-  ])));
-  return answers.some(Boolean);
-}
-
 async function brBroadcast(message) {
   let tabs = [];
   try { tabs = await chrome.tabs.query({}); } catch (e) { return; }
   for (const tab of tabs) chrome.tabs.sendMessage(tab.id, message).catch(() => {});
 }
 
-// Firefox found and downloaded a new version. Install it straight away unless someone is
-// using BloxRegion right now; then let them restart it from the window.
+// Firefox found and downloaded a new version. Because this listener exists, Firefox holds
+// it rather than installing it: it's installed when the player types /update (or when
+// Firefox restarts, which always applies a held update).
 chrome.runtime.onUpdateAvailable.addListener(async (details) => {
-  if (!(await brAnyWindowOpen())) {
-    chrome.runtime.reload();
-    return;
-  }
   await chrome.storage.local.set({ brPendingUpdate: details.version });
   brBroadcast({ action: 'brUpdateReady', version: details.version });
 });
@@ -237,18 +245,13 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     return true;
   }
 
+  // Only ever from /update: restarting the add-on installs the update Firefox is holding.
   if (message.action === 'brApplyUpdate') {
-    sendResponse({ success: true });
-    setTimeout(() => chrome.runtime.reload(), 150);
-    return false;
-  }
-
-  if (message.action === 'brWindowClosed') {
-    (async () => {
-      const { brPendingUpdate } = await chrome.storage.local.get('brPendingUpdate');
-      if (brPendingUpdate && !(await brAnyWindowOpen())) chrome.runtime.reload();
-    })();
-    return false;
+    chrome.storage.local.get('brPendingUpdate').then(({ brPendingUpdate }) => {
+      sendResponse({ success: !!brPendingUpdate });
+      if (brPendingUpdate) setTimeout(() => chrome.runtime.reload(), 150);
+    });
+    return true;
   }
 
   if (message.action === 'brSelfGeo') {
@@ -268,76 +271,20 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     return true;
   }
 
-  if (message.action === 'checkRoRegionPermission') {
-    sendResponse({ granted: true });
-    return false;
-  }
-
-  if (message.action === 'requestRoRegionPermission') {
-    sendResponse({ granted: true });
-    return false;
-  }
-
-  if (message.action === 'injectScript') {
-    const { codeToInject } = message;
+  if (message.action === 'brPage') {
+    const func = Object.hasOwn(BR_PAGE_CALLS, message.call) ? BR_PAGE_CALLS[message.call] : null;
+    if (!func || !sender.tab) {
+      sendResponse({ success: false });
+      return false;
+    }
     chrome.scripting.executeScript({
       target: { tabId: sender.tab.id },
       world: 'MAIN',
-      func: (code) => {
-        try {
-          const script = document.createElement('script');
-          script.textContent = code;
-          document.documentElement.appendChild(script);
-          script.remove();
-        } catch (error) {}
-      },
-      args: [codeToInject],
+      func,
+      args: Array.isArray(message.args) ? message.args : [],
     })
-      .then(() => sendResponse({ success: true }))
+      .then((results) => sendResponse({ success: true, result: results && results[0] ? results[0].result : null }))
       .catch((error) => sendResponse({ success: false, error: error.message }));
-    return true;
-  }
-
-  if (message.action === 'enableServerJoinHeaders') {
-    chrome.declarativeNetRequest.updateEnabledRulesets({ enableRulesetIds: ['ruleset_2'] });
-    return false;
-  }
-  if (message.action === 'disableServerJoinHeaders') {
-    chrome.declarativeNetRequest.updateEnabledRulesets({ disableRulesetIds: ['ruleset_2'] });
-    return false;
-  }
-
-  if (message.action === 'RR_LAUNCH_GAME') {
-    (async () => {
-      try {
-        const { placeId } = message;
-        await chrome.scripting.executeScript({
-          target: { tabId: sender.tab.id },
-          func: rrLaunchGameInstance,
-          args: [parseInt(placeId), ''],
-          world: 'MAIN',
-        });
-        sendResponse({ success: true });
-      } catch (err) {
-        sendResponse({ success: false, error: err.message });
-      }
-    })();
-    return true;
-  }
-
-  if (message.action === 'RR_LAUNCH_GAME_MOBILE') {
-    (async () => {
-      try {
-        const { placeId } = message;
-        const inner = encodeURIComponent(
-          `https://www.roblox.com/games/start?placeid=${placeId}`
-        );
-        const deepLink = `https://ro.blox.com/Ebh5?is_retargeting=false&pid=experiencestart_mobileweb&af_dp=${inner}&af_web_dp=${inner}&deep_link_value=${inner}`;
-        sendResponse({ success: true, deepLink });
-      } catch (err) {
-        sendResponse({ success: false, error: err.message });
-      }
-    })();
     return true;
   }
 

@@ -253,7 +253,8 @@
 	const setText = (el, text) => {
 		if (el.textContent !== text) el.textContent = text;
 	};
-	const fmt = n => (n || 0).toLocaleString('en-US');
+	const NUMBER = new Intl.NumberFormat('en-US');
+	const fmt = n => NUMBER.format(n || 0);
 
 	const store = {
 		get(keys) {
@@ -275,7 +276,9 @@
 			} catch (e) { resolve(null); }
 		});
 	}
-	const runInPage = code => sendMsg({ action: 'injectScript', codeToInject: code });
+	// Runs one of the background script's fixed page functions (csrf, join) in the
+	// page itself, where Roblox's own scripts live.
+	const pageCall = (call, ...args) => sendMsg({ action: 'brPage', call, args });
 
 	function h(tag, props, ...kids) {
 		const el = document.createElement(tag);
@@ -325,13 +328,19 @@
 	};
 	const FILLED_ICONS = new Set(['play', 'star']);
 
+	// Built once per name, then cloned.
+	const iconTemplates = new Map();
 	function icon(name) {
-		const filled = FILLED_ICONS.has(name);
-		const svg = svgEl('svg', filled
-			? { viewBox: '0 0 24 24', class: 'br-icon is-filled', fill: 'currentColor', 'aria-hidden': 'true' }
-			: { viewBox: '0 0 24 24', class: 'br-icon', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-		for (const [tag, attrs] of ICONS[name] || []) svg.appendChild(svgEl(tag, attrs));
-		return svg;
+		let svg = iconTemplates.get(name);
+		if (!svg) {
+			const filled = FILLED_ICONS.has(name);
+			svg = svgEl('svg', filled
+				? { viewBox: '0 0 24 24', class: 'br-icon is-filled', fill: 'currentColor', 'aria-hidden': 'true' }
+				: { viewBox: '0 0 24 24', class: 'br-icon', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+			for (const [tag, attrs] of ICONS[name] || []) svg.appendChild(svgEl(tag, attrs));
+			iconTemplates.set(name, svg);
+		}
+		return svg.cloneNode(true);
 	}
 
 	// Flags are drawn as inline SVG (Roblox's CSP blocks third-party flag images).
@@ -409,14 +418,53 @@
 		NG: V3('#008751', '#fff', '#008751')
 	};
 
+	// Each flag is drawn once into a small PNG (Roblox's CSP allows data: images, not
+	// third-party flag images); every copy is a single <img> sharing one decoded image,
+	// instead of an inline SVG of up to thirty shapes in each sidebar row and server card.
+	const flagUrls = new Map();
+	function flagUrl(cc) {
+		let url = flagUrls.get(cc);
+		if (url) return url;
+		// 4× the shapes' 30×20 box: sharp at every flag size, even on high-DPI screens.
+		const canvas = document.createElement('canvas');
+		canvas.width = 120;
+		canvas.height = 80;
+		const ctx = canvas.getContext('2d');
+		ctx.scale(4, 4);
+		for (const [tag, a] of FLAGS[cc]) {
+			let path;
+			if (tag === 'rect') {
+				path = new Path2D();
+				path.rect(+a.x || 0, +a.y || 0, +a.width, +a.height);
+			} else if (tag === 'circle') {
+				path = new Path2D();
+				path.arc(+a.cx, +a.cy, +a.r, 0, Math.PI * 2);
+			} else if (tag === 'polygon') {
+				path = new Path2D('M' + a.points.trim().split(/\s+/).join('L') + 'Z');
+			} else {
+				path = new Path2D(a.d);
+			}
+			const fill = a.fill == null ? '#000' : a.fill;
+			if (fill !== 'none') {
+				ctx.fillStyle = fill;
+				ctx.fill(path);
+			}
+			if (a.stroke && a.stroke !== 'none') {
+				ctx.strokeStyle = a.stroke;
+				ctx.lineWidth = +a['stroke-width'] || 1;
+				ctx.stroke(path);
+			}
+		}
+		url = canvas.toDataURL('image/png');
+		flagUrls.set(cc, url);
+		return url;
+	}
+
 	function flag(code, size) {
 		const cc = String(code || '').slice(0, 2).toUpperCase();
 		const wrap = h('span', { class: 'br-flag' + (size ? ' is-' + size : ''), 'aria-hidden': 'true' });
-		const shapes = FLAGS[cc];
-		if (shapes) {
-			const svg = svgEl('svg', { viewBox: '0 0 30 20', preserveAspectRatio: 'xMidYMid slice' });
-			for (const [tag, attrs] of shapes) svg.appendChild(svgEl(tag, attrs));
-			wrap.append(svg);
+		if (FLAGS[cc]) {
+			wrap.append(h('img', { alt: '', src: flagUrl(cc), decoding: 'async' }));
 		} else {
 			let hash = 0;
 			for (const ch of cc) hash = (hash * 31 + ch.charCodeAt(0)) % 360;
@@ -468,7 +516,22 @@
 		el.style.setProperty('--br-bouncy-dur', MOTION.bouncy.ms + 'ms');
 	}
 
+	// Plays a class's CSS animation from the start again. Rewinding the animation itself
+	// avoids the forced layout of the usual remove / read offsetWidth / add trick; those
+	// animations keep their end state (fill: both) so they're still there to rewind.
 	function restartAnimation(el, cls) {
+		if (!el.classList.contains(cls)) {
+			el.classList.add(cls);
+			return;
+		}
+		const anims = el.getAnimations ? el.getAnimations().filter(a => typeof CSSAnimation !== 'undefined' && a instanceof CSSAnimation) : [];
+		if (anims.length) {
+			for (const a of anims) {
+				a.currentTime = 0;
+				a.play();
+			}
+			return;
+		}
 		el.classList.remove(cls);
 		void el.offsetWidth;
 		el.classList.add(cls);
@@ -498,8 +561,8 @@
 		const target = e.target && e.target.closest && e.target.closest('.br-shine, #br-launch');
 		if (!target) return;
 		const r = target.getBoundingClientRect();
-		target.style.setProperty('--mx', (e.clientX - r.left) + 'px');
-		target.style.setProperty('--my', (e.clientY - r.top) + 'px');
+		target.style.setProperty('--br-mx', (e.clientX - r.left) + 'px');
+		target.style.setProperty('--br-my', (e.clientY - r.top) + 'px');
 	}
 
 	// ---------------------------------------------------------------------------
@@ -731,18 +794,9 @@
 		const meta = document.querySelector('meta[name="csrf-token"]');
 		return meta ? (meta.getAttribute('data-token') || meta.getAttribute('content') || null) : null;
 	}
-	function readMainWorldCsrf() {
-		return new Promise(resolve => {
-			const code = "try{var t=(window.Roblox&&Roblox.XsrfToken&&Roblox.XsrfToken.getToken&&Roblox.XsrfToken.getToken())||'';var d=document.getElementById('__br_xsrf')||document.createElement('div');d.id='__br_xsrf';d.setAttribute('data-token',t);d.style.display='none';document.documentElement.appendChild(d);}catch(e){}";
-			runInPage(code).then(() => {
-				setTimeout(() => {
-					const el = document.getElementById('__br_xsrf');
-					const token = el ? el.getAttribute('data-token') : null;
-					if (el) el.remove();
-					resolve(token || null);
-				}, 60);
-			});
-		});
+	async function readMainWorldCsrf() {
+		const res = await pageCall('csrf');
+		return res && res.success && typeof res.result === 'string' && res.result ? res.result : null;
 	}
 	let csrfPending = null;
 	async function getCsrf() {
@@ -1106,11 +1160,13 @@
 		list: [],             // { id, name, displayName }
 		presence: new Map(),  // userId -> presence
 		avatars: new Map(),   // userId -> headshot url
-		regions: new Map(),   // gameId -> { code, la, lo } | null when it can't be resolved
+		regions: new Map(),   // gameId -> { code, la, lo } of servers that can be joined
+		failed: new Map(),    // gameId -> when it last couldn't be reached (full, private, …)
 		updatedAt: 0,
 		loading: null
 	};
 	const FRIENDS_TTL = 20000;
+	const FRIEND_RETRY = 60000; // servers fill up and empty out; look again after a minute
 	const friendLookups = new Set();
 
 	async function fetchFriendList(userId) {
@@ -1191,7 +1247,8 @@
 		return FRIENDS.loading;
 	}
 
-	// Groups friends by the server they're in: this game, other games, server hidden, or just online.
+	// Groups friends by the server they're in (this game or another), or just online. Friends
+	// whose server is hidden by their privacy settings aren't listed.
 	let friendGroupsMemo = null, friendGroupsKey = '';
 	function friendGroups() {
 		const memoKey = FRIENDS.updatedAt + ':' + FRIENDS.list.length;
@@ -1201,7 +1258,7 @@
 		return friendGroupsMemo;
 	}
 	function buildFriendGroups() {
-		const here = new Map(), elsewhere = new Map(), hidden = [], online = [];
+		const here = new Map(), elsewhere = new Map(), online = [];
 		for (const f of FRIENDS.list) {
 			const p = FRIENDS.presence.get(f.id);
 			if (!p) continue;
@@ -1212,23 +1269,31 @@
 				let g = bucket.get(p.gameId);
 				if (!g) bucket.set(p.gameId, g = { key: p.gameId, gameId: p.gameId, placeId: p.placeId, game: p.lastLocation || 'Roblox experience', here: isHere, friends: [] });
 				g.friends.push(f);
-			} else if (type === 2) {
-				hidden.push({ key: 'hidden:' + f.id, gameId: null, placeId: p.placeId || null, game: p.lastLocation || 'In a game', here: false, hidden: true, friends: [f] });
 			} else if (type === 1 || type === 3) {
 				online.push({ friend: f, where: type === 3 ? 'In Studio' : 'Online' });
 			}
 		}
-		return { here: [...here.values()], elsewhere: [...elsewhere.values()], hidden, online };
+		return { here: [...here.values()], elsewhere: [...elsewhere.values()], online };
+	}
+
+	// Only servers that can be joined are shown: found, and their location known. Ones still
+	// being looked up stay out of sight, and ones that can't be reached are left out.
+	function joinableFriendGroups() {
+		const g = friendGroups();
+		const ok = x => FRIENDS.regions.has(x.gameId);
+		const waiting = [...g.here, ...g.elsewhere].some(x => !ok(x) && !FRIENDS.failed.has(x.gameId));
+		return { here: g.here.filter(ok), elsewhere: g.elsewhere.filter(ok), online: g.online, waiting };
 	}
 
 	function friendSummary() {
 		if (FRIENDS.state === 'signed-out') return { count: 0, sub: 'Sign in to see friends', here: 0 };
 		if (FRIENDS.state !== 'ready') return { count: 0, sub: FRIENDS.state === 'error' ? 'Couldn’t load friends' : 'Loading…', here: 0 };
-		const g = friendGroups();
+		const g = joinableFriendGroups();
 		const here = g.here.reduce((n, x) => n + x.friends.length, 0);
-		const playing = here + g.elsewhere.reduce((n, x) => n + x.friends.length, 0) + g.hidden.length;
-		let sub = 'No one online';
+		const playing = here + g.elsewhere.reduce((n, x) => n + x.friends.length, 0);
+		let sub = 'No one to join';
 		if (playing) sub = here ? `${here} here · ${playing} playing` : `${playing} playing`;
+		else if (g.waiting) sub = 'Finding their servers…';
 		else if (g.online.length) sub = `${g.online.length} online`;
 		return { count: playing, sub, here, online: g.online.length };
 	}
@@ -1257,6 +1322,7 @@
 		const { here, elsewhere } = friendGroups();
 		for (const g of [...here, ...elsewhere]) {
 			if (FRIENDS.regions.has(g.gameId) || friendLookups.has(g.gameId)) continue;
+			if (Date.now() - (FRIENDS.failed.get(g.gameId) || 0) < FRIEND_RETRY) continue;
 			const known = S.placeOf.get(g.gameId);
 			if (known && known.c !== '??') {
 				FRIENDS.regions.set(g.gameId, { code: known.c, la: known.l ? known.l.la : null, lo: known.l ? known.l.lo : null });
@@ -1277,6 +1343,7 @@
 			const r = await joinLookup(g.placeId, g.gameId);
 			if (r.result === 'ok') {
 				FRIENDS.regions.set(g.gameId, { code: r.loc.code, la: r.loc.la, lo: r.loc.lo });
+				FRIENDS.failed.delete(g.gameId);
 				rememberJob(g.gameId, r.loc);
 				scheduleUpdate();
 				return;
@@ -1284,8 +1351,8 @@
 			if (r.result !== 'limited') break;
 			await sleep(1200 * (attempt + 1));
 		}
-		// Full or restricted servers don't reveal their address.
-		FRIENDS.regions.set(g.gameId, null);
+		// Full or restricted servers don't reveal their address: not shown, tried again later.
+		FRIENDS.failed.set(g.gameId, Date.now());
 		scheduleUpdate();
 	}
 
@@ -1332,19 +1399,26 @@
 		return out;
 	}
 
+	// BloxRegion never installs an update by itself: /update does, when the player asks.
 	const UPDATE_COPY = {
-		ready: v => ({ title: `BloxRegion ${v} is ready`, sub: 'Firefox has already downloaded it. Restart BloxRegion to switch over; the page reloads on the new version.' }),
-		store: v => ({ title: `BloxRegion ${v} is available`, sub: 'Firefox installs add-on updates on its own within a day, or you can get it right now from Firefox Add-ons.' }),
-		review: v => ({ title: `BloxRegion ${v} is on its way`, sub: 'It’s waiting for Mozilla’s review. Firefox installs it automatically once it’s approved; nothing to do on your side.' })
+		ready: v => ({ title: `BloxRegion ${v} is ready`, sub: 'It’s downloaded and waiting. Type /update or press Update now to install it; nothing changes until you do.' }),
+		store: v => ({ title: `BloxRegion ${v} is available`, sub: 'It’s live on Firefox Add-ons. Firefox downloads it in the background, then /update installs it. Or get it now from Firefox Add-ons.' }),
+		review: v => ({ title: `BloxRegion ${v} is on its way`, sub: 'It’s waiting for Mozilla’s review. Once it’s out and downloaded, /update installs it.' })
 	};
 
 	function applyUpdate() {
 		if (UPD.applying) return;
 		UPD.applying = true;
 		toast('Updating BloxRegion…', 'download');
-		sendMsg({ action: 'brApplyUpdate' });
-		// The extension restarts on the new version; reload so this page runs it too.
-		setTimeout(() => location.reload(), 1200);
+		sendMsg({ action: 'brApplyUpdate' }).then(res => {
+			if (!res || !res.success) {
+				UPD.applying = false;
+				toast('There’s no downloaded update to install yet', 'info');
+				return;
+			}
+			// The extension restarts on the new version; reload so this page runs it too.
+			setTimeout(() => location.reload(), 1200);
+		});
 	}
 
 	function updateLines() {
@@ -1377,7 +1451,7 @@
 			const copy = UPDATE_COPY[state](info.target);
 			const actions = h('div', { class: 'br-actions' });
 			if (state === 'ready') {
-				actions.append(h('button', { type: 'button', class: 'br-btn is-primary', onclick: applyUpdate }, icon('download'), 'Restart to update'));
+				actions.append(h('button', { type: 'button', class: 'br-btn is-primary', onclick: () => runCommand('/update') }, icon('download'), 'Update now'));
 			} else if (state === 'store') {
 				actions.append(h('a', { class: 'br-btn is-primary', href: info.amoUrl, target: '_blank', rel: 'noopener noreferrer' }, icon('download'), 'Get it now'));
 			}
@@ -1411,16 +1485,8 @@
 
 	function joinServer(serverId, code, targetPlaceId = placeId) {
 		pauseForLaunch(15000);
-		runInPage(`(function(){try{var L=window.Roblox&&Roblox.GameLauncher;if(L&&L.joinGameInstance){L.joinGameInstance(${Number(targetPlaceId)},${JSON.stringify(String(serverId))});}}catch(e){}})();`);
+		pageCall('join', Number(targetPlaceId), String(serverId));
 		toast(code ? 'Launching Roblox · ' + regionTitle(code) : 'Launching Roblox…', 'play');
-		setTimeout(closeWindow, 500);
-	}
-
-	// Roblox's own "join friend" flow, which also handles friends whose server is hidden.
-	function followFriend(friend) {
-		pauseForLaunch(15000);
-		runInPage(`(function(){try{var L=window.Roblox&&Roblox.GameLauncher;if(L&&L.followPlayerIntoGame){L.followPlayerIntoGame(${Number(friend.id)});}}catch(e){}})();`);
-		toast('Joining ' + (friend.displayName || friend.name) + '…', 'people');
 		setTimeout(closeWindow, 500);
 	}
 
@@ -1621,8 +1687,6 @@
 		setTimeout(() => {
 			if (UI.view && UI.view.destroy) UI.view.destroy();
 			root.remove();
-			// A downloaded update waits until the window closes.
-			sendMsg({ action: 'brWindowClosed' });
 			document.body.style.overflow = prevBodyOverflow;
 			Object.assign(UI, { root: null, closing: false, view: null, input: null, sideList: null, pill: null, consoleHost: null, toastEl: null });
 			UI.rows.clear();
@@ -1665,7 +1729,14 @@
 		const input = h('input', { type: 'text', placeholder: 'Search, or type / for commands', spellcheck: 'false', autocomplete: 'off', role: 'combobox', 'aria-autocomplete': 'list', 'aria-expanded': 'false', 'aria-label': 'Search regions or run a command' });
 		const suggest = h('div', { class: 'br-suggest is-hidden', role: 'listbox', 'aria-label': 'Suggestions' });
 		UI.sug = { el: suggest, items: [], active: 0, query: null };
-		input.addEventListener('input', () => setSearch(input.value, true));
+		input.addEventListener('input', () => {
+			if (input.value.trim().toLowerCase() === 'viewport') {
+				setSearch('');
+				openViewport();
+				return;
+			}
+			setSearch(input.value, true);
+		});
 		input.addEventListener('focus', renderSuggestions);
 		input.addEventListener('blur', () => setTimeout(() => {
 			if (UI.input && document.activeElement !== UI.input) hideSuggestions();
@@ -1748,7 +1819,7 @@
 		{ cmd: 'home', icon: 'house', desc: 'Back to the overview', alias: ['overview', 'clear', 'cls'] },
 		{ cmd: 'list', icon: 'layers', desc: 'Every region with its server count', alias: ['ls'] },
 		{ cmd: 'version', icon: 'bolt', desc: 'Show the installed version', alias: ['ver'] },
-		{ cmd: 'update', icon: 'download', desc: 'Check for a new version', alias: ['upgrade', 'updates'] },
+		{ cmd: 'update', icon: 'download', desc: 'Install a downloaded update, or check for one', alias: ['upgrade', 'updates'] },
 		{ cmd: 'credits', icon: 'sparkle', desc: 'Who made BloxRegion' },
 		{ cmd: 'contacts', icon: 'link', desc: 'Contact links', alias: ['contact'] },
 		{ cmd: 'exit', icon: 'close', desc: 'Close BloxRegion', alias: ['quit', 'close'] }
@@ -2084,7 +2155,17 @@
 		positionPill(animate);
 	}
 
+	// Measures on the next frame, once the DOM changes of this click are all in, so the
+	// window is laid out once instead of after every step.
+	let pillFrame = 0, pillAnimate = false;
 	function positionPill(animate) {
+		pillAnimate = pillAnimate || animate;
+		if (!pillFrame) pillFrame = requestAnimationFrame(placePill);
+	}
+	function placePill() {
+		const animate = pillAnimate;
+		pillFrame = 0;
+		pillAnimate = false;
 		const pill = UI.pill;
 		if (!pill) return;
 		UI.pillKey = UI.selKey;
@@ -2189,7 +2270,12 @@
 		UI.bar.style.transform = `scaleX(${running ? scanProgress() : 1})`;
 	}
 
+	let segFrame = 0;
 	function placeSegThumb(animate) {
+		cancelAnimationFrame(segFrame);
+		segFrame = requestAnimationFrame(() => placeSegThumbNow(animate));
+	}
+	function placeSegThumbNow(animate) {
 		const seg = UI.seg;
 		if (!seg) return;
 		for (const [key, b] of seg.opts) {
@@ -2307,8 +2393,7 @@
 		const friendsRow = h('div', { class: 'br-card-friends' });
 		const regionV = h('span', { class: 'br-v' });
 		const pingV = h('span', { class: 'br-v' });
-		const joinLabel = h('span', { text: 'Join' });
-		const join = h('button', { type: 'button', class: 'br-btn is-primary' }, icon('play'), joinLabel);
+		const join = h('button', { type: 'button', class: 'br-btn is-primary' }, icon('play'), 'Join');
 		const el = h('article', { class: 'br-card br-shine is-friend' },
 			h('div', { class: 'br-card-top' }, gameEl, playersEl),
 			friendsRow,
@@ -2319,22 +2404,17 @@
 		let signature = '';
 		join.addEventListener('click', () => {
 			if (!group) return;
-			if (group.gameId) {
-				const r = FRIENDS.regions.get(group.gameId);
-				joinServer(group.gameId, r ? r.code : null, group.placeId);
-			} else {
-				followFriend(group.friends[0]);
-			}
+			const r = FRIENDS.regions.get(group.gameId);
+			joinServer(group.gameId, r ? r.code : null, group.placeId);
 		});
 		return {
 			el,
 			update(next) {
 				group = next;
-				const region = next.gameId ? FRIENDS.regions.get(next.gameId) : null;
-				const pending = !!next.gameId && !FRIENDS.regions.has(next.gameId);
-				const server = next.gameId && next.here ? S.servers.get(next.gameId) : null;
+				const region = FRIENDS.regions.get(next.gameId);
+				const server = next.here ? S.servers.get(next.gameId) : null;
 				const sig = [next.game, next.here, next.friends.map(f => f.id + (FRIENDS.avatars.has(f.id) ? '+' : '')).join(','),
-					region ? region.code : pending ? 'pending' : 'none', server ? server.playing : '', S.userLoc ? 'loc' : ''].join('|');
+					region ? region.code : 'none', server ? server.playing : '', S.userLoc ? 'loc' : ''].join('|');
 				if (sig === signature) return;
 				signature = sig;
 				gameEl.textContent = '';
@@ -2351,11 +2431,9 @@
 					pingV.textContent = Number.isFinite(ping) ? '~' + ping + ' ms' : '—';
 					if (pingTier(ping)) pingV.classList.add('is-' + pingTier(ping));
 				} else {
-					regionV.textContent = next.hidden ? 'Hidden' : pending ? 'Looking up…' : 'Unavailable';
-					regionV.title = next.hidden ? 'Their privacy settings hide which server they’re in' : pending ? '' : 'Full or private servers don’t reveal their location';
+					regionV.textContent = '—';
 					pingV.textContent = '—';
 				}
-				joinLabel.textContent = next.hidden ? 'Try to join' : 'Join';
 			}
 		};
 	}
@@ -2400,10 +2478,10 @@
 		}
 
 		function update() {
-			const g = friendGroups();
+			const g = joinableFriendGroups();
 			const summary = friendSummary();
 			const here = g.here;
-			const elsewhere = [...g.elsewhere, ...g.hidden];
+			const elsewhere = g.elsewhere;
 			const ready = FRIENDS.state === 'ready';
 
 			if (ready) setTitle(null, 'Friends', `${summary.here} in this game · ${summary.count - summary.here} in other games · ${g.online.length} online`);
@@ -2448,9 +2526,15 @@
 			} else if (!FRIENDS.list.length) {
 				title = 'No friends yet';
 				sub = 'Add friends on Roblox and they’ll show up here when they play.';
+			} else if (!here.length && !elsewhere.length && g.waiting) {
+				title = 'Finding your friends’ servers…';
+				sub = 'Checking which servers they’re in and whether you can join them.';
 			} else if (!here.length && !elsewhere.length && !online.length) {
-				title = 'None of your friends are online';
-				sub = 'This list refreshes on its own every 30 seconds.';
+				const inGames = friendGroups().here.length + friendGroups().elsewhere.length;
+				title = inGames ? 'No friends in servers you can join' : 'None of your friends are online';
+				sub = inGames
+					? 'Friends in full or private servers, or who hide their server, aren’t shown. This list refreshes every 30 seconds.'
+					: 'This list refreshes on its own every 30 seconds.';
 			}
 			empty.classList.toggle('is-hidden', !title);
 			setText(emptyTitle, title);
@@ -2464,12 +2548,16 @@
 		const value = h('div', { class: 'br-tile-value', text: '0' });
 		const sub = h('div', { class: 'br-tile-sub' });
 		const el = h('div', { class: 'br-tile br-shine' }, h('div', { class: 'br-tile-label' }, icon(iconName), label), value, sub);
-		let shown = 0, target = 0, from = 0, start = 0, raf = 0;
+		let shown = 0, target = 0, from = 0, start = 0, raf = 0, wrote = 0;
 		const step = now => {
 			// rAF timestamps can predate performance.now() taken earlier in the same frame.
 			const t = Math.max(0, Math.min(1, (now - start) / 650));
 			shown = from + (target - from) * (1 - Math.pow(1 - t, 3));
-			value.textContent = fmt(Math.round(shown));
+			// About 20 updates a second reads as counting up and costs a third of every frame.
+			if (t >= 1 || now - wrote > 48) {
+				wrote = now;
+				setText(value, fmt(Math.round(shown)));
+			}
 			raf = t < 1 ? requestAnimationFrame(step) : 0;
 		};
 		return {
@@ -2632,6 +2720,7 @@
 
 		let list = [];          // every server in this view, kept sorted
 		let rendered = 0;       // list[0 … rendered) have cards, in the same order as grid.children
+		let want = 18;          // cards there's room for: a first screenful, plus whatever was scrolled into
 		let lastInsert = 0;
 		const consumed = new Map(); // region code -> how many of S.byRegion's servers we've taken
 
@@ -2690,13 +2779,14 @@
 			consumed.clear();
 			list = takeFresh().sort(compare);
 			rendered = 0;
+			want = 18;
 			lastInsert = performance.now();
 			grid.textContent = '';
 			// First screenful now, the rest on the next frame so the view transition never hitches.
 			renderMore(9);
 			const gen = ++buildGen;
 			requestAnimationFrame(() => {
-				if (gen === buildGen && rendered < 18) renderMore(18 - rendered);
+				if (gen === buildGen && rendered < want) renderMore(want - rendered);
 			});
 		}
 
@@ -2718,23 +2808,31 @@
 			if (!fresh.length) return;
 			lastInsert = performance.now();
 			const before = REDUCED_MOTION || !rendered ? [] : visibleCards();
-			const added = [];
+			let added = 0;
 			for (const s of fresh) {
 				const caughtUp = rendered === list.length;
 				const at = insertionIndex(s);
 				list.splice(at, 0, s);
-				if (at < rendered || caughtUp) {
+				if (at < rendered || (caughtUp && rendered < want)) {
 					const card = serverCard(s, 0);
 					card.classList.add('is-fresh');
 					grid.insertBefore(card, grid.children[at] || null);
 					rendered++;
-					added.push(card);
+					added++;
+					// Keep the grid to the cards there's room for (a big region would otherwise
+					// build, and fetch avatars for, every server); the last one returns on scroll.
+					if (rendered > want) {
+						grid.lastElementChild.remove();
+						rendered--;
+					}
 				}
 			}
-			if (!before.length || !added.length) return;
+			rearm();
+			if (!before.length || !added) return;
 			// FLIP: cards that were pushed along glide to their new spot.
 			const moved = [];
 			for (const [card, x, y] of before) {
+				if (!card.isConnected) continue;
 				const dx = x - card.offsetLeft, dy = y - card.offsetTop;
 				if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
 				card.style.transition = 'none';
@@ -2753,20 +2851,26 @@
 
 		const io = new IntersectionObserver(entries => {
 			if (!entries.some(e => e.isIntersecting)) return;
-			renderMore(12);
-			// Re-arm: if the sentinel is still in range after this batch, the observer only
-			// reports changes, so observing again makes it fire for the next batch.
+			want = Math.max(want, rendered + 12);
+			renderMore(want - rendered);
+			rearm();
+		}, { root: el, rootMargin: '0px 0px 600px 0px' });
+		io.observe(sentinel);
+		// The observer only reports changes; if the sentinel is still in range while servers
+		// are waiting for a card, observing again makes it fire for the next batch.
+		function rearm() {
 			if (rendered < list.length) {
 				io.unobserve(sentinel);
 				io.observe(sentinel);
 			}
-		}, { root: el, rootMargin: '0px 0px 600px 0px' });
-		io.observe(sentinel);
+		}
 
 		function update(first) {
 			if (first) rebuild();
 			// Batch arrivals (at most ~1.6 times a second) so the grid stays calm during a busy scan.
 			else if (!list.length || performance.now() - lastInsert > 600) insertFresh();
+			// Held back: come back for them even if nothing else changes (say, the scan just ended).
+			else scheduleUpdate();
 
 			const total = list.length;
 			empty.classList.toggle('is-hidden', total > 0);
@@ -2798,6 +2902,7 @@
 				buildGen++;
 				list = [];
 				rendered = 0;
+				want = 18;
 				consumed.clear();
 				keyCache.clear();
 				grid.textContent = '';
@@ -2907,6 +3012,7 @@
 		const t = String(raw || '').trim().replace(/^\/+/, '').trim().toLowerCase();
 		if (!t) return null;
 		if (t === '-v' || t === '--version') return { kind: 'version' };
+		if (t === 'viewport') return { kind: 'viewport' };
 		const command = SLASH_COMMANDS.find(c => c.cmd === t || (c.alias || []).includes(t));
 		if (command) return { kind: command.cmd };
 		const continents = { na: 'North America', sa: 'South America', eu: 'Europe', oc: 'Oceania' };
@@ -2948,13 +3054,28 @@
 				else toast(SCAN.active ? 'Still looking for servers near you…' : 'No servers found near you', 'info');
 				break;
 			}
-			case 'update':
+			case 'update': {
+				// The only way an update gets installed: a downloaded one goes in now, otherwise check.
+				const install = () => {
+					showConsole(raw, [['Installing ', { b: 'v' + UPD.info.target }, '. The page reloads on the new version.']]);
+					applyUpdate();
+				};
+				if (updateState() === 'ready') {
+					install();
+					break;
+				}
 				showConsole(raw, [['Checking for updates…']]);
 				loadUpdateInfo(true).then(() => {
+					if (!UI.root) return;
+					if (updateState() === 'ready') {
+						install();
+						return;
+					}
 					if (UI.consoleHost && UI.consoleHost.firstChild) showConsole(raw, updateLines());
-					if (updateState() !== 'current' && UI.root) selectOverview();
+					if (updateState() !== 'current') selectOverview();
 				});
 				break;
+			}
 			case 'version':
 				showConsole(raw, [
 					[{ k: 'BloxRegion' }, { b: 'v' + VERSION }, ' — free and open source'],
@@ -2989,6 +3110,10 @@
 			case 'exit':
 				closeWindow();
 				break;
+			case 'viewport':
+				hideConsole();
+				openViewport();
+				break;
 			case 'region':
 				hideConsole();
 				selectRegion(cmd.value);
@@ -3002,6 +3127,13 @@
 		}
 	}
 
+	// Easter egg, never suggested: "ViewPort" opens a little window with the player's avatar
+	// (viewport.js) that stays on every roblox.com page until it's closed.
+	function openViewport() {
+		store.get(['brViewport']).then(v => store.set({ brViewport: Object.assign({}, v.brViewport, { open: true }) }));
+		toast('ViewPort', 'sparkle');
+	}
+
 	function showConsole(cmdText, lines) {
 		const host = UI.consoleHost;
 		if (!host) return;
@@ -3009,9 +3141,11 @@
 		const closeBtn = h('button', { type: 'button', class: 'br-iconbtn br-console-close', 'aria-label': 'Dismiss' }, icon('close'));
 		closeBtn.addEventListener('click', hideConsole);
 		const card = h('div', { class: 'br-console', role: 'log' }, h('div', { class: 'br-console-head' }, h('span', { class: 'br-console-cmd', text: '› ' + cmdText }), closeBtn));
-		// Output resolves word by word, each word fading in from a soft blur.
+		// Output resolves word by word; long output (like /list) a line at a time, which is
+		// far fewer animations to run.
+		const perLine = lines.length > 12;
 		let word = 0;
-		for (const line of lines) {
+		lines.forEach((line, li) => {
 			const row = h('div', { class: 'br-line' });
 			for (const seg of line) {
 				if (seg && seg.k) {
@@ -3020,16 +3154,24 @@
 				}
 				const text = typeof seg === 'string' ? seg : (seg.a || seg.b || '');
 				const target = seg && seg.href ? h('a', { href: seg.href, target: '_blank', rel: 'noopener noreferrer' }) : seg && seg.b ? h('b') : h('span');
-				for (const part of text.split(/(\s+)/)) {
-					if (!part) continue;
-					const w = h('span', { class: 'br-w', text: part });
-					w.style.animationDelay = Math.min(word++ * 16, 900) + 'ms';
-					target.append(w);
+				if (perLine) {
+					target.append(text);
+				} else {
+					for (const part of text.split(/(\s+)/)) {
+						if (!part) continue;
+						const w = h('span', { class: 'br-w', text: part });
+						w.style.animationDelay = Math.min(word++ * 16, 900) + 'ms';
+						target.append(w);
+					}
 				}
 				row.append(target);
 			}
+			if (perLine) {
+				row.classList.add('is-in');
+				row.style.animationDelay = Math.min(li * 22, 700) + 'ms';
+			}
 			card.append(row);
-		}
+		});
 		host.append(card);
 	}
 
@@ -3081,8 +3223,7 @@
 	try {
 		chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 			if (!msg) return;
-			if (msg.action === 'brWindowOpen?') sendResponse({ open: !!UI.root });
-			else if (msg.action === 'brUpdateReady') loadUpdateInfo(false);
+			if (msg.action === 'brUpdateReady') loadUpdateInfo(false);
 		});
 	} catch (e) {}
 
