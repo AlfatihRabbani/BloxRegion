@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.4
 
 - **ViewPort: textures** — shirts, faces, hair and accessories now show their
   textures instead of plain colours.
