@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **ViewPort: textures** — shirts, faces, hair and accessories now show their
+  textures instead of plain colours.
+- **ViewPort: turns as one** — head, torso and arms turn toward the cursor
+  together, so nothing looks cut off at the neck.
+- **ViewPort: stays put between pages** — it appears the moment a page starts
+  loading, showing your avatar as you left it, and carries on live once the
+  page is ready, instead of reloading each time.
+
 ## 2.3
 
 - There's something new hiding in the search field. It follows you around

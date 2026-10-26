@@ -25,12 +25,23 @@
       ],
       "js": [
         "avatar3d.js",
-        "viewport.js",
+        "viewport.js"
+      ],
+      "css": [
+        "viewport.css"
+      ],
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "*://*.roblox.com/*"
+      ],
+      "js": [
         "regionSelector.js"
       ],
       "css": [
-        "bloxregion.css",
-        "viewport.css"
+        "bloxregion.css"
       ],
       "run_at": "document_end",
       "all_frames": false

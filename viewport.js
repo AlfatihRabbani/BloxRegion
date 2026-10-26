@@ -23,6 +23,8 @@
 	const P = 14;                      // the torso layer reaches this far past the frame (sides, below)
 	const SRC = 150;                   // size of the bust render that is measured
 	const MODEL_TTL = 10 * 60 * 1000;  // how long a known 3D avatar link is used before asking again
+	const SHOT_KEY = 'brViewportShot'; // this tab's last 3D frame and pose (sessionStorage)
+	const WIDTH = 196, HEIGHT = 235;   // the window's size (set in viewport.css)
 	const REDUCED_MOTION = (() => {
 		try { return matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; }
 	})();
@@ -111,6 +113,9 @@
 	}
 
 	function loadImage(url) {
+		// Through fetch where possible: Firefox may not let an add-on read pixels of an
+		// image it pointed straight at the CDN.
+		if (window.__brAvatar3d) return window.__brAvatar3d.fetchImage(url);
 		return new Promise((resolve, reject) => {
 			const img = new Image();
 			img.crossOrigin = 'anonymous';
@@ -177,8 +182,50 @@
 		x: null, y: null, pivot: null, neck: 0.64, cx: 0.5,
 		target: { yaw: 0, pitch: 0, body: 0 }, cur: { yaw: 0, pitch: 0, body: 0 }, raf: 0,
 		user: null, token: 0, drawn: false,
-		gl: null, r3d: null, headAt: 0.35, lastFrame: 0
+		gl: null, r3d: null, headAt: 0.35, lastFrame: 0, load3d: 0, shotEl: null, shotTimer: 0
 	};
+
+	// ---------------------------------------------------------------------------
+	// Carrying the 3D avatar across page loads
+	// ---------------------------------------------------------------------------
+
+	// A page can't keep anything alive through a navigation, so before leaving one the
+	// current frame and pose are saved; the next page shows that frame straight away and
+	// swaps the live avatar in, in the same pose, once it's ready.
+	function readShot() {
+		try {
+			const shot = JSON.parse(sessionStorage.getItem(SHOT_KEY) || 'null');
+			return shot && /^data:image\/png;base64,/.test(shot.url) ? shot : null;
+		} catch (e) {
+			return null;
+		}
+	}
+
+	function snapshot() {
+		clearTimeout(V.shotTimer);
+		if (!V.r3d || !V.el) return;
+		try {
+			render(performance.now());
+			const { yaw, pitch } = V.cur;
+			sessionStorage.setItem(SHOT_KEY, JSON.stringify({ user: V.user ? V.user.id : null, url: V.gl.toDataURL('image/png'), yaw, pitch }));
+		} catch (e) {}
+	}
+
+	function removeShot() {
+		if (V.shotEl) V.shotEl.remove();
+		V.shotEl = null;
+	}
+
+	// Back to the 2D bust: no live avatar, no saved frame.
+	function drop3d() {
+		V.load3d++;
+		if (V.r3d) V.r3d.destroy();
+		V.r3d = null;
+		removeShot();
+		if (V.el) V.el.classList.remove('is-3d', 'is-instant');
+		V.pivot = null;
+		try { sessionStorage.removeItem(SHOT_KEY); } catch (e) {}
+	}
 
 	function mount(animate) {
 		if (V.el) return;
@@ -218,7 +265,19 @@
 		gl.height = 94;
 		const body = document.createElement('div');
 		body.className = 'brv-body';
-		body.append(stage, gl);
+		body.append(stage);
+		const shot = readShot();
+		if (shot) {
+			const img = document.createElement('img');
+			img.className = 'brv-shot';
+			img.alt = '';
+			img.src = shot.url;
+			body.append(img);
+			V.shotEl = img;
+			V.cur.yaw = V.target.yaw = +shot.yaw || 0;
+			V.cur.pitch = V.target.pitch = +shot.pitch || 0;
+		}
+		body.append(gl);
 
 		const el = document.createElement('div');
 		el.id = 'br-viewport';
@@ -228,7 +287,17 @@
 		el.append(bar, body);
 		Object.assign(V, { el, bar, nameSlot, head, torso, stage, gl, body, pivot: null, drawn: false, r3d: null });
 		bar.addEventListener('pointerdown', startDrag);
-		document.body.append(el);
+		// On the root element, not <body>: it goes in as the page starts loading (as soon as
+		// there is a root), and the page's own scripts never rebuild it.
+		const attach = () => {
+			if (V.el === el && !el.isConnected) document.documentElement.append(el);
+		};
+		if (document.documentElement) attach();
+		else new MutationObserver((records, observer) => {
+			if (!document.documentElement) return;
+			observer.disconnect();
+			attach();
+		}).observe(document, { childList: true });
 		place(V.x, V.y);
 		document.addEventListener('pointermove', onPointer, { passive: true });
 		window.addEventListener('resize', onResize);
@@ -240,9 +309,12 @@
 		if (!V.el) return;
 		if (V.r3d) V.r3d.destroy();
 		V.r3d = null;
+		V.load3d++;
+		removeShot();
 		V.el.remove();
 		V.el = null;
 		V.token++;
+		clearTimeout(V.shotTimer);
 		cancelAnimationFrame(V.raf);
 		V.raf = 0;
 		document.removeEventListener('pointermove', onPointer);
@@ -278,7 +350,7 @@
 			head.fillRect(R * 0.39, R * 0.3, R * 0.06, R * 0.06);
 			head.fillRect(R * 0.55, R * 0.3, R * 0.06, R * 0.06);
 		} else {
-			const k = img.naturalWidth / SRC;
+			const k = (img.naturalWidth || img.width) / SRC;
 			const neckPx = Math.round(frame.neck * R);
 			for (const ctx of [head, torso]) {
 				ctx.imageSmoothingEnabled = true;
@@ -311,17 +383,25 @@
 	async function loadAvatar() {
 		const token = ++V.token;
 		const cached = (await store.get([USER_KEY]))[USER_KEY];
-		if (cached && cached.id && token === V.token) {
+		if (token !== V.token) return;
+		// Start at once with the player seen last; they're checked once the page is in.
+		if (cached && cached.id) {
 			V.user = { id: cached.id, name: cached.name };
 			showUser(V.user);
-			if (cached.bust) await showBust(cached.bust, token);
+			if (V.shotEl && readShot().user !== cached.id) removeShot();
+			load3d(V.user, cached, token);
+			if (cached.bust) showBust(cached.bust, token);
+		} else {
+			removeShot();
 		}
+		if (document.readyState === 'loading') await new Promise(r => document.addEventListener('DOMContentLoaded', r, { once: true }));
 		const user = await currentUser();
 		if (token !== V.token) return;
 		if (!user) {
 			if (user === null || !V.drawn) {
 				V.user = null;
 				showUser(null);
+				drop3d();
 				drawAvatar();
 			}
 			return;
@@ -329,7 +409,10 @@
 		V.user = user;
 		showUser(user);
 		const same = !!cached && cached.id === user.id;
-		load3d(user, same ? cached : null, token);
+		if (!same) {
+			drop3d();
+			load3d(user, null, token);
+		}
 		const bust = await bustUrl(user.id);
 		if (token !== V.token) return;
 		if (bust && (!V.drawn || !same || cached.bust !== bust)) await showBust(bust, token);
@@ -342,38 +425,57 @@
 		store.get([USER_KEY]).then(v => store.set({ [USER_KEY]: Object.assign({}, v[USER_KEY], patch) }));
 	}
 
-	// The real 3D avatar, faded in over the 2D one once it has loaded.
+	// The real 3D avatar, shown over the 2D one once it and its textures have loaded:
+	// straight over a saved frame, or faded in over the bust.
 	async function load3d(user, cached, token) {
+		const id = ++V.load3d;
+		const current = () => id === V.load3d && token === V.token && !!V.el;
+		const giveUp = why => {
+			if (!current()) return;
+			if (why) console.warn('[BloxRegion] 3D avatar unavailable:', why);
+			removeShot();
+		};
 		const A = window.__brAvatar3d;
-		if (!A || !A.supported()) return;
+		if (!A || !A.supported()) return giveUp('WebGL is not available');
 		const known = cached && cached.model && Date.now() - (cached.modelAt || 0) < MODEL_TTL ? cached.model : null;
-		let loaded = null;
+		let loaded = null, why = '';
 		try {
 			loaded = await A.load(user.id, known);
 		} catch (e) {
+			why = e.message;
 			// A remembered link can go stale when the avatar changes; ask Roblox again.
-			if (known && token === V.token) {
-				try { loaded = await A.load(user.id, null); } catch (e2) {}
+			if (known && current()) {
+				try { loaded = await A.load(user.id, null); } catch (e2) { why = e2.message; }
 			}
 		}
-		if (!loaded || token !== V.token || !V.el) return;
+		if (!loaded) return giveUp(why);
+		if (!current()) return;
 		let renderer;
 		try {
 			renderer = A.createRenderer(V.gl, loaded.model, () => {
 				if (V.r3d !== renderer) return;
 				V.r3d = null;
-				if (V.el) V.el.classList.remove('is-3d');
+				if (V.el) V.el.classList.remove('is-3d', 'is-instant');
 				V.pivot = null;
 			});
 		} catch (e) {
+			return giveUp(e.message);
+		}
+		await renderer.ready;
+		if (!current()) {
+			renderer.destroy();
 			return;
 		}
 		V.r3d = renderer;
 		V.headAt = loaded.model.headAt;
 		V.pivot = null;
 		renderer.onChange(kick);
+		render(performance.now());
+		V.el.classList.toggle('is-instant', !!V.shotEl);
 		V.el.classList.add('is-3d');
+		removeShot();
 		kick();
+		snapshot();
 		if (loaded.url !== known) saveUser({ model: loaded.url, modelAt: Date.now() });
 	}
 
@@ -400,15 +502,20 @@
 				V.pivot = { x: r.left + r.width * V.cx, y: r.top + r.height * V.neck * 0.62 };
 			}
 		}
-		// Minecraft's inventory model: atan of the offset, the head turning further than the
-		// body. A real 3D head can turn as far as Minecraft's; the flat one turns less.
+		// Minecraft's inventory model: atan of the offset. The 3D avatar turns as one; the
+		// flat one turns its head further than its body.
 		const f = Math.atan((e.clientX - V.pivot.x) / 90);
 		const g = Math.atan((e.clientY - V.pivot.y) / 90);
-		const k = V.r3d ? [38, 22, 17] : [22, 12, 8];
+		const k = V.r3d ? [34, 10, 0] : [22, 12, 8];
 		V.target.yaw = f * k[0];
 		V.target.pitch = -g * k[1];
 		V.target.body = f * k[2];
 		kick();
+		// Keep this tab's saved frame current, a moment after the pointer settles.
+		if (V.r3d) {
+			clearTimeout(V.shotTimer);
+			V.shotTimer = setTimeout(snapshot, 500);
+		}
 	}
 
 	function kick() {
@@ -450,7 +557,7 @@
 
 	function place(x, y) {
 		if (!V.el) return;
-		const w = V.el.offsetWidth || 196, h = V.el.offsetHeight || 236;
+		const w = WIDTH, h = HEIGHT;
 		if (typeof x !== 'number' || typeof y !== 'number') {
 			// Centred in the space left of the BloxRegion window (min(1160px, 100vw - 40px)
 			// wide, centred), or against the edge when there's no room beside it.
@@ -518,9 +625,10 @@
 		});
 	} catch (e) {}
 
-	function start() {
-		store.get([KEY]).then(v => apply(v[KEY]));
-	}
-	if (document.body) start();
-	else document.addEventListener('DOMContentLoaded', start, { once: true });
+	// Runs as the page starts loading, so the window is back before the page has drawn.
+	store.get([KEY]).then(v => apply(v[KEY]));
+	window.addEventListener('pagehide', snapshot);
+	document.addEventListener('visibilitychange', () => {
+		if (document.visibilityState === 'hidden') snapshot();
+	});
 })();

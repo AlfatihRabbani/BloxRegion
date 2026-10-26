@@ -42,10 +42,20 @@
 		};
 		return [...new Set([`https://tr.rbxcdn.com/${hash}`, xor(32), xor(hash.length)])];
 	}
+	// A file hash from the 3D JSON or an MTL line (which may carry options and a path).
 	const cleanHash = v => {
 		const hash = String(v || '').trim().split(/\s+/).pop().split(/[\\/]/).pop();
-		return /^[A-Za-z0-9_-]{8,200}$/.test(hash) ? hash : null;
+		return /^[A-Za-z0-9._-]{8,200}$/.test(hash) ? hash : null;
 	};
+	// The texture an MTL line points at: one of the render's listed textures when the line
+	// contains it, otherwise whatever hash the line ends with.
+	function textureHash(value, known) {
+		const v = String(value || '');
+		for (const hash of known) if (v.includes(hash)) return hash;
+		return cleanHash(v);
+	}
+
+	const warn = (...args) => console.warn('[BloxRegion] 3D avatar:', ...args);
 
 	async function cdnText(hash) {
 		for (const url of cdnUrls(hash)) {
@@ -57,20 +67,60 @@
 		throw new Error('CDN file unavailable');
 	}
 
-	function cdnImage(hash) {
-		const urls = cdnUrls(hash);
-		return new Promise((resolve, reject) => {
-			const next = () => {
-				const url = urls.shift();
-				if (!url) return reject(new Error('texture unavailable'));
+	// Textures come through fetch, like the OBJ and MTL. Firefox won't let an add-on upload
+	// an <img> pointed straight at the CDN to WebGL, but bytes it already fetched decode
+	// into an image (from a data: URL, which Roblox's CSP allows) that it can.
+	async function cdnTexture(hash) {
+		let why = 'not found';
+		for (const url of cdnUrls(hash)) {
+			try {
+				const res = await fetch(url, { credentials: 'omit' });
+				if (!res.ok) {
+					why = 'HTTP ' + res.status;
+					continue;
+				}
+				return await decodeImage(await res.blob());
+			} catch (e) {
+				why = (e && e.message) || String(e);
+			}
+		}
+		throw new Error(why);
+	}
+
+	// The CDN's content types aren't always image types; name the format from its bytes.
+	async function imageType(blob) {
+		const b = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
+		if (b[0] === 0x89 && b[1] === 0x50) return 'image/png';
+		if (b[0] === 0xff && b[1] === 0xd8) return 'image/jpeg';
+		if (b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return 'image/webp';
+		if (b[0] === 0x47 && b[1] === 0x49) return 'image/gif';
+		return blob.type || 'image/png';
+	}
+
+	async function decodeImage(blob) {
+		blob = new Blob([blob], { type: await imageType(blob) });
+		try {
+			const url = await new Promise((resolve, reject) => {
+				const reader = new FileReader();
+				reader.addEventListener('load', () => resolve(reader.result));
+				reader.addEventListener('error', () => reject(reader.error));
+				reader.readAsDataURL(blob);
+			});
+			return await new Promise((resolve, reject) => {
 				const img = new Image();
-				img.crossOrigin = 'anonymous';
 				img.addEventListener('load', () => resolve(img));
-				img.addEventListener('error', next);
+				img.addEventListener('error', () => reject(new Error('image did not decode')));
 				img.src = url;
-			};
-			next();
-		});
+			});
+		} catch (e) {
+			// Where a page's CSP doesn't allow data: images: decode the bytes directly.
+			const bitmap = await createImageBitmap(blob);
+			const canvas = document.createElement('canvas');
+			canvas.width = bitmap.width;
+			canvas.height = bitmap.height;
+			canvas.getContext('2d').drawImage(bitmap, 0, 0);
+			return canvas;
+		}
 	}
 
 	// ---------------------------------------------------------------------------
@@ -200,8 +250,8 @@
 		return b;
 	}
 
-	// Splits the avatar into head (with whatever sits on it) and body, and works out where
-	// the neck is and how to frame head and shoulders.
+	// Works out where the neck is, to frame head and shoulders and to turn the avatar about
+	// its middle.
 	function analyse(groups) {
 		for (const g of groups) g.box = bounds(g.data);
 		const all = { min: [0, 1, 2].map(k => Math.min(...groups.map(g => g.box.min[k]))), max: [0, 1, 2].map(k => Math.max(...groups.map(g => g.box.max[k]))) };
@@ -233,30 +283,10 @@
 		const headH = Math.max(headBox.max[1] - neck, height * 0.08);
 		const pivot = [(headBox.min[0] + headBox.max[0]) / 2, neck, (headBox.min[2] + headBox.max[2]) / 2];
 
-		// What turns with the head: the head itself and anything mostly above the neck
-		// (hats, hair, face accessories). Unnamed meshes are split triangle by triangle.
-		const parts = [];
-		for (const g of groups) {
-			if (named.length) {
-				const head = named.includes(g) || (g.box.center[1] > neck - headH * 0.15 && g.box.max[1] > neck + headH * 0.3);
-				parts.push({ ...g, head });
-			} else {
-				const up = [], down = [];
-				for (let i = 0; i < g.data.length; i += STRIDE * 3) {
-					const cy = (g.data[i + 1] + g.data[i + STRIDE + 1] + g.data[i + STRIDE * 2 + 1]) / 3;
-					const out = cy > neck ? up : down;
-					for (let k = 0; k < STRIDE * 3; k++) out.push(g.data[i + k]);
-				}
-				if (up.length) parts.push({ ...g, data: new Float32Array(up), head: true });
-				if (down.length) parts.push({ ...g, data: new Float32Array(down), head: false });
-			}
-		}
-
 		// Head and shoulders, like the inventory view: from mid-chest to just over the head.
 		const bottom = neck - headH * 1.1, top = neck + headH * 1.35;
 		return {
-			parts,
-			pivot,
+			parts: groups,
 			axis: [pivot[0], pivot[2]],
 			view: { center: [pivot[0], (bottom + top) / 2, pivot[2]], height: top - bottom },
 			headAt: (top - (neck + headH * 0.5)) / (top - bottom)
@@ -383,9 +413,9 @@ void main() {
 			gl.bufferData(gl.ARRAY_BUFFER, part.data, gl.STATIC_DRAW);
 			const d = info.d !== undefined ? parseFloat(info.d) : 1;
 			return {
-				buf, count: part.data.length / STRIDE, head: part.head,
+				buf, count: part.data.length / STRIDE,
 				kd: kd.every(Number.isFinite) ? kd : [1, 1, 1],
-				map: cleanHash(info.map_kd),
+				map: textureHash(info.map_kd, model.textures || []),
 				cutout: info.rbx_alphamode === 'transparent' || part.alpha,
 				opacity: Number.isFinite(d) ? d : 1
 			};
@@ -394,33 +424,40 @@ void main() {
 		items.sort((a, b) => (a.opacity < 1) - (b.opacity < 1));
 
 		let frameRequested = null;
-		for (const hash of new Set(items.map(i => i.map).filter(Boolean))) {
-			cdnImage(hash).then(img => {
-				if (lost) return;
-				const tex = gl.createTexture();
-				gl.bindTexture(gl.TEXTURE_2D, tex);
-				gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-				try {
-					gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
-				} catch (e) {
-					return; // a texture the CDN didn't allow us to read: colours only
-				}
-				const pot = n => (n & (n - 1)) === 0;
-				if (webgl2 || (pot(img.width) && pot(img.height))) {
-					gl.generateMipmap(gl.TEXTURE_2D);
-					gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-					gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-					gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
-				} else {
-					gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-					gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-					gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-				}
-				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-				textures.set(hash, tex);
-				if (frameRequested) frameRequested();
-			}, () => {});
-		}
+		const hashes = [...new Set(items.map(i => i.map).filter(Boolean))];
+		let loadedCount = 0;
+		const loads = hashes.map(hash => cdnTexture(hash).then(img => {
+			if (lost) return;
+			const tex = gl.createTexture();
+			gl.bindTexture(gl.TEXTURE_2D, tex);
+			gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+			try {
+				gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+			} catch (e) {
+				warn('texture', hash, 'could not be uploaded:', e.message);
+				return;
+			}
+			const pot = n => (n & (n - 1)) === 0;
+			if (webgl2 || (pot(img.width) && pot(img.height))) {
+				gl.generateMipmap(gl.TEXTURE_2D);
+				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+			} else {
+				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+				gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+			}
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+			textures.set(hash, tex);
+			loadedCount++;
+			if (frameRequested) frameRequested();
+		}, e => warn('texture', hash, 'failed:', e.message)));
+		// Ready once every texture has arrived (or given up), so it never shows up bare;
+		// a slow texture doesn't hold it back for more than a few seconds.
+		const ready = Promise.race([Promise.allSettled(loads), new Promise(r => setTimeout(r, 4000))]).then(() => {
+			console.info(`[BloxRegion] 3D avatar: ${items.length} parts, ${loadedCount}/${hashes.length} textures`);
+		});
 
 		// Camera: in front of the avatar (Roblox avatars face −Z), a little above, framing
 		// head and shoulders.
@@ -443,16 +480,16 @@ void main() {
 			gl.uniform3fv(loc.uEye, eye);
 			gl.uniform1i(loc.uMap, 0);
 
-			// The body turns about its vertical axis and breathes; the head turns on the neck.
+			// The whole avatar (head, torso and arms together) turns toward the cursor about
+			// its middle, and breathes.
 			const [ax, az] = model.axis;
 			const breathe = Math.sin(pose.time * 2.1) * model.view.height * 0.004;
-			const body = M.mul(M.translate(0, breathe, 0), M.about([ax, 0, az], M.rotY(pose.body * DEG)));
-			const head = M.mul(body, M.about(model.pivot, M.mul(M.rotY((pose.yaw - pose.body) * DEG), M.rotX(pose.pitch * DEG))));
+			const turn = M.about([ax, model.view.center[1], az], M.mul(M.rotY(pose.yaw * DEG), M.rotX(pose.pitch * DEG)));
+			const m = M.mul(M.translate(0, breathe, 0), turn);
+			gl.uniformMatrix4fv(loc.uModel, false, m);
+			gl.uniformMatrix3fv(loc.uNormal, false, M.normal3(m));
 
 			for (const item of items) {
-				const m = item.head ? head : body;
-				gl.uniformMatrix4fv(loc.uModel, false, m);
-				gl.uniformMatrix3fv(loc.uNormal, false, M.normal3(m));
 				gl.uniform3fv(loc.uKd, item.kd);
 				const tex = item.map && textures.get(item.map);
 				gl.uniform1i(loc.uHasMap, tex ? 1 : 0);
@@ -488,6 +525,7 @@ void main() {
 
 		return {
 			render,
+			ready,
 			// Called when a texture arrives, so the caller can draw a fresh frame.
 			onChange(fn) { frameRequested = fn; },
 			destroy() {
@@ -516,6 +554,7 @@ void main() {
 		if (!groups.length) throw new Error('empty avatar');
 		const model = analyse(groups);
 		model.materials = parseMtl(mtlText);
+		model.textures = (Array.isArray(meta.textures) ? meta.textures : []).map(cleanHash).filter(Boolean);
 		return { url, model };
 	}
 
@@ -528,5 +567,12 @@ void main() {
 		}
 	}
 
-	window.__brAvatar3d = { load, modelUrl, createRenderer, supported };
+	// Any CDN image, fetched and decoded the same way as textures (for the 2D bust).
+	async function fetchImage(url) {
+		const res = await fetch(url, { credentials: 'omit' });
+		if (!res.ok) throw new Error('HTTP ' + res.status);
+		return decodeImage(await res.blob());
+	}
+
+	window.__brAvatar3d = { load, modelUrl, createRenderer, supported, fetchImage };
 })();
