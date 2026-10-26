@@ -82,7 +82,7 @@ Publishing a GitHub release submits it to Firefox Add-ons automatically, through
 3. Publish a GitHub release tagged `v<version>` (for example `v2.1`). The release text becomes the Firefox Add-ons release notes.
 4. The workflow checks the tag matches `manifest.json`, builds and lints the add-on, submits it to Firefox Add-ons, and attaches the zip to the release. Once Mozilla approves it, every user gets the update.
 
-To submit an existing release again, open the Actions tab, select **Publish to Firefox Add-ons**, click **Run workflow**, and enter the tag.
+To submit an existing release again, open the Actions tab, select **Publish to Firefox Add-ons**, click **Run workflow**, and enter the tag. Entering a new tag (for example `v2.3`, after bumping `manifest.json`) creates that release on the chosen branch, with its `CHANGELOG.md` section as the text, and publishes it.
 
 ## Requirements
 

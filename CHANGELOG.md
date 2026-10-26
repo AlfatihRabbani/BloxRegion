@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.3
 
 - There's something new hiding in the search field. It follows you around
   roblox.com once you find it.
@@ -28,7 +28,7 @@
 - **Friends: only servers you can join** — friends who hide their server, or
   who are in a full or private one, are no longer listed (or counted). Full
   servers are checked again after a minute in case a spot opens up.
-- Joining a server, joining a friend and reading Roblox's security token now
+- Joining a server and reading Roblox's security token now
   call Roblox's page functions directly instead of injecting script text into
   the page.
 - Removed leftover code and files from older versions (an unused rule set

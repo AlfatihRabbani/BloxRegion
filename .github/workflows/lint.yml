@@ -22,7 +22,7 @@ jobs:
 
       - name: Check scripts parse
         run: |
-          for f in background.js regionSelector.js; do node --check "$f"; done
+          for f in *.js; do node --check "$f"; done
           node -e "for (const f of ['manifest.json', 'json/rules.json']) JSON.parse(require('fs').readFileSync(f, 'utf8'))"
 
       - name: Lint the add-on
