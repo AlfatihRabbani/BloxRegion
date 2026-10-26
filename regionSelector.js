@@ -1325,19 +1325,26 @@
 		return out;
 	}
 
+	// BloxRegion never installs an update by itself: /update does, when the player asks.
 	const UPDATE_COPY = {
-		ready: v => ({ title: `BloxRegion ${v} is ready`, sub: 'Firefox has already downloaded it. Restart BloxRegion to switch over; the page reloads on the new version.' }),
-		store: v => ({ title: `BloxRegion ${v} is available`, sub: 'Firefox installs add-on updates on its own within a day, or you can get it right now from Firefox Add-ons.' }),
-		review: v => ({ title: `BloxRegion ${v} is on its way`, sub: 'It’s waiting for Mozilla’s review. Firefox installs it automatically once it’s approved; nothing to do on your side.' })
+		ready: v => ({ title: `BloxRegion ${v} is ready`, sub: 'It’s downloaded and waiting. Type /update or press Update now to install it; nothing changes until you do.' }),
+		store: v => ({ title: `BloxRegion ${v} is available`, sub: 'It’s live on Firefox Add-ons. Firefox downloads it in the background, then /update installs it. Or get it now from Firefox Add-ons.' }),
+		review: v => ({ title: `BloxRegion ${v} is on its way`, sub: 'It’s waiting for Mozilla’s review. Once it’s out and downloaded, /update installs it.' })
 	};
 
 	function applyUpdate() {
 		if (UPD.applying) return;
 		UPD.applying = true;
 		toast('Updating BloxRegion…', 'download');
-		sendMsg({ action: 'brApplyUpdate' });
-		// The extension restarts on the new version; reload so this page runs it too.
-		setTimeout(() => location.reload(), 1200);
+		sendMsg({ action: 'brApplyUpdate' }).then(res => {
+			if (!res || !res.success) {
+				UPD.applying = false;
+				toast('There’s no downloaded update to install yet', 'info');
+				return;
+			}
+			// The extension restarts on the new version; reload so this page runs it too.
+			setTimeout(() => location.reload(), 1200);
+		});
 	}
 
 	function updateLines() {
@@ -1370,7 +1377,7 @@
 			const copy = UPDATE_COPY[state](info.target);
 			const actions = h('div', { class: 'br-actions' });
 			if (state === 'ready') {
-				actions.append(h('button', { type: 'button', class: 'br-btn is-primary', onclick: applyUpdate }, icon('download'), 'Restart to update'));
+				actions.append(h('button', { type: 'button', class: 'br-btn is-primary', onclick: () => runCommand('/update') }, icon('download'), 'Update now'));
 			} else if (state === 'store') {
 				actions.append(h('a', { class: 'br-btn is-primary', href: info.amoUrl, target: '_blank', rel: 'noopener noreferrer' }, icon('download'), 'Get it now'));
 			}
@@ -1614,8 +1621,6 @@
 		setTimeout(() => {
 			if (UI.view && UI.view.destroy) UI.view.destroy();
 			root.remove();
-			// A downloaded update waits until the window closes.
-			sendMsg({ action: 'brWindowClosed' });
 			document.body.style.overflow = prevBodyOverflow;
 			Object.assign(UI, { root: null, closing: false, view: null, input: null, sideList: null, pill: null, consoleHost: null, toastEl: null });
 			UI.rows.clear();
@@ -1748,7 +1753,7 @@
 		{ cmd: 'home', icon: 'house', desc: 'Back to the overview', alias: ['overview', 'clear', 'cls'] },
 		{ cmd: 'list', icon: 'layers', desc: 'Every region with its server count', alias: ['ls'] },
 		{ cmd: 'version', icon: 'bolt', desc: 'Show the installed version', alias: ['ver'] },
-		{ cmd: 'update', icon: 'download', desc: 'Check for a new version', alias: ['upgrade', 'updates'] },
+		{ cmd: 'update', icon: 'download', desc: 'Install a downloaded update, or check for one', alias: ['upgrade', 'updates'] },
 		{ cmd: 'credits', icon: 'sparkle', desc: 'Who made BloxRegion' },
 		{ cmd: 'contacts', icon: 'link', desc: 'Contact links', alias: ['contact'] },
 		{ cmd: 'exit', icon: 'close', desc: 'Close BloxRegion', alias: ['quit', 'close'] }
@@ -2966,13 +2971,28 @@
 				else toast(SCAN.active ? 'Still looking for servers near you…' : 'No servers found near you', 'info');
 				break;
 			}
-			case 'update':
+			case 'update': {
+				// The only way an update gets installed: a downloaded one goes in now, otherwise check.
+				const install = () => {
+					showConsole(raw, [['Installing ', { b: 'v' + UPD.info.target }, '. The page reloads on the new version.']]);
+					applyUpdate();
+				};
+				if (updateState() === 'ready') {
+					install();
+					break;
+				}
 				showConsole(raw, [['Checking for updates…']]);
 				loadUpdateInfo(true).then(() => {
+					if (!UI.root) return;
+					if (updateState() === 'ready') {
+						install();
+						return;
+					}
 					if (UI.consoleHost && UI.consoleHost.firstChild) showConsole(raw, updateLines());
-					if (updateState() !== 'current' && UI.root) selectOverview();
+					if (updateState() !== 'current') selectOverview();
 				});
 				break;
+			}
 			case 'version':
 				showConsole(raw, [
 					[{ k: 'BloxRegion' }, { b: 'v' + VERSION }, ' — free and open source'],
@@ -3110,8 +3130,7 @@
 	try {
 		chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 			if (!msg) return;
-			if (msg.action === 'brWindowOpen?') sendResponse({ open: !!UI.root });
-			else if (msg.action === 'brUpdateReady') loadUpdateInfo(false);
+			if (msg.action === 'brUpdateReady') loadUpdateInfo(false);
 		});
 	} catch (e) {}
 

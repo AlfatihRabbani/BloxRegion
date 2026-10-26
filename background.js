@@ -232,30 +232,16 @@ async function brCheckForUpdate(force) {
   return { ...info, installed, state, target };
 }
 
-// Is a BloxRegion window open in any tab? (Applying an update reloads the extension.)
-async function brAnyWindowOpen() {
-  let tabs = [];
-  try { tabs = await chrome.tabs.query({}); } catch (e) { return false; }
-  const answers = await Promise.all(tabs.map(tab => Promise.race([
-    chrome.tabs.sendMessage(tab.id, { action: 'brWindowOpen?' }).then(r => !!(r && r.open)).catch(() => false),
-    new Promise(resolve => setTimeout(() => resolve(false), 400))
-  ])));
-  return answers.some(Boolean);
-}
-
 async function brBroadcast(message) {
   let tabs = [];
   try { tabs = await chrome.tabs.query({}); } catch (e) { return; }
   for (const tab of tabs) chrome.tabs.sendMessage(tab.id, message).catch(() => {});
 }
 
-// Firefox found and downloaded a new version. Install it straight away unless someone is
-// using BloxRegion right now; then let them restart it from the window.
+// Firefox found and downloaded a new version. Because this listener exists, Firefox holds
+// it rather than installing it: it's installed when the player types /update (or when
+// Firefox restarts, which always applies a held update).
 chrome.runtime.onUpdateAvailable.addListener(async (details) => {
-  if (!(await brAnyWindowOpen())) {
-    chrome.runtime.reload();
-    return;
-  }
   await chrome.storage.local.set({ brPendingUpdate: details.version });
   brBroadcast({ action: 'brUpdateReady', version: details.version });
 });
@@ -269,18 +255,13 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     return true;
   }
 
+  // Only ever from /update: restarting the add-on installs the update Firefox is holding.
   if (message.action === 'brApplyUpdate') {
-    sendResponse({ success: true });
-    setTimeout(() => chrome.runtime.reload(), 150);
-    return false;
-  }
-
-  if (message.action === 'brWindowClosed') {
-    (async () => {
-      const { brPendingUpdate } = await chrome.storage.local.get('brPendingUpdate');
-      if (brPendingUpdate && !(await brAnyWindowOpen())) chrome.runtime.reload();
-    })();
-    return false;
+    chrome.storage.local.get('brPendingUpdate').then(({ brPendingUpdate }) => {
+      sendResponse({ success: !!brPendingUpdate });
+      if (brPendingUpdate) setTimeout(() => chrome.runtime.reload(), 150);
+    });
+    return true;
   }
 
   if (message.action === 'brSelfGeo') {

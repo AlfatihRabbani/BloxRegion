@@ -12,8 +12,13 @@
   screen plus what you scroll into, instead of every server it finds. After
   a refresh in a busy region, that's a few dozen cards and avatar lookups
   instead of thousands.
-- **Updates no longer reload your Roblox tabs** — when BloxRegion updates in
-  the background, open game pages switch to the new version in place.
+- **Updates only when you say so** — BloxRegion no longer installs updates on
+  its own. Firefox still downloads them in the background; BloxRegion holds
+  them until you type `/update` (or press **Update now**). Firefox does apply
+  a downloaded update when it restarts; turn off automatic updates for
+  BloxRegion in `about:addons` to stop downloads altogether.
+- **Updates no longer reload your Roblox tabs** — when BloxRegion updates,
+  open game pages switch to the new version in place.
 - Joining a server, joining a friend and reading Roblox's security token now
   call Roblox's page functions directly instead of injecting script text into
   the page.

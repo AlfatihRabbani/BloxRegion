@@ -53,7 +53,7 @@ Press <kbd>/</kbd> anywhere in the window (or type `/` in the search field) to o
 | `/home` | Back to the overview |
 | `/list` | Every region with its server count |
 | `/version` | Show the installed version |
-| `/update` | Check for a new version |
+| `/update` | Install a downloaded update, or check for one |
 | `/credits` | Show credits |
 | `/contacts` | Show contact links |
 | `/exit` | Close the window |
@@ -63,13 +63,13 @@ Press <kbd>/</kbd> anywhere in the window (or type `/` in the search field) to o
 
 ## Updates
 
-BloxRegion checks GitHub and Firefox Add-ons every few hours. When there's a newer version, the globe button gets a blue dot, the sidebar shows **Update**, and the Overview shows what's new.
+BloxRegion never updates by itself. It checks GitHub and Firefox Add-ons every few hours, and when there's a newer version the globe button gets a blue dot, the sidebar shows **Update**, and the Overview shows what's new.
 
-- **Live on Firefox Add-ons:** Firefox installs it on its own, usually within a day. **Get it now** opens the listing if you don't want to wait.
-- **Downloaded while BloxRegion is open:** Firefox holds it until you click **Restart to update** or close the window.
-- **Still in Mozilla's review:** nothing to do. It installs automatically once approved.
+- **Downloaded:** Firefox fetches new versions in the background, and BloxRegion holds them. Type `/update` (or press **Update now**) to install; nothing changes until you do.
+- **Live on Firefox Add-ons, not downloaded yet:** `/update` tells you so. **Get it now** opens the listing if you don't want to wait.
+- **Still in Mozilla's review:** nothing to do yet.
 
-Type `/update` to check right away.
+Firefox itself installs a downloaded update when it restarts. To stop it downloading updates at all, turn off **Allow automatic updates** for BloxRegion in `about:addons`.
 
 ## Releasing a new version
 
