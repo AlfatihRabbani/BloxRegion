@@ -2625,6 +2625,7 @@
 
 		let list = [];          // every server in this view, kept sorted
 		let rendered = 0;       // list[0 … rendered) have cards, in the same order as grid.children
+		let want = 18;          // cards there's room for: a first screenful, plus whatever was scrolled into
 		let lastInsert = 0;
 		const consumed = new Map(); // region code -> how many of S.byRegion's servers we've taken
 
@@ -2683,13 +2684,14 @@
 			consumed.clear();
 			list = takeFresh().sort(compare);
 			rendered = 0;
+			want = 18;
 			lastInsert = performance.now();
 			grid.textContent = '';
 			// First screenful now, the rest on the next frame so the view transition never hitches.
 			renderMore(9);
 			const gen = ++buildGen;
 			requestAnimationFrame(() => {
-				if (gen === buildGen && rendered < 18) renderMore(18 - rendered);
+				if (gen === buildGen && rendered < want) renderMore(want - rendered);
 			});
 		}
 
@@ -2711,23 +2713,31 @@
 			if (!fresh.length) return;
 			lastInsert = performance.now();
 			const before = REDUCED_MOTION || !rendered ? [] : visibleCards();
-			const added = [];
+			let added = 0;
 			for (const s of fresh) {
 				const caughtUp = rendered === list.length;
 				const at = insertionIndex(s);
 				list.splice(at, 0, s);
-				if (at < rendered || caughtUp) {
+				if (at < rendered || (caughtUp && rendered < want)) {
 					const card = serverCard(s, 0);
 					card.classList.add('is-fresh');
 					grid.insertBefore(card, grid.children[at] || null);
 					rendered++;
-					added.push(card);
+					added++;
+					// Keep the grid to the cards there's room for (a big region would otherwise
+					// build, and fetch avatars for, every server); the last one returns on scroll.
+					if (rendered > want) {
+						grid.lastElementChild.remove();
+						rendered--;
+					}
 				}
 			}
-			if (!before.length || !added.length) return;
+			rearm();
+			if (!before.length || !added) return;
 			// FLIP: cards that were pushed along glide to their new spot.
 			const moved = [];
 			for (const [card, x, y] of before) {
+				if (!card.isConnected) continue;
 				const dx = x - card.offsetLeft, dy = y - card.offsetTop;
 				if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
 				card.style.transition = 'none';
@@ -2746,20 +2756,26 @@
 
 		const io = new IntersectionObserver(entries => {
 			if (!entries.some(e => e.isIntersecting)) return;
-			renderMore(12);
-			// Re-arm: if the sentinel is still in range after this batch, the observer only
-			// reports changes, so observing again makes it fire for the next batch.
+			want = Math.max(want, rendered + 12);
+			renderMore(want - rendered);
+			rearm();
+		}, { root: el, rootMargin: '0px 0px 600px 0px' });
+		io.observe(sentinel);
+		// The observer only reports changes; if the sentinel is still in range while servers
+		// are waiting for a card, observing again makes it fire for the next batch.
+		function rearm() {
 			if (rendered < list.length) {
 				io.unobserve(sentinel);
 				io.observe(sentinel);
 			}
-		}, { root: el, rootMargin: '0px 0px 600px 0px' });
-		io.observe(sentinel);
+		}
 
 		function update(first) {
 			if (first) rebuild();
 			// Batch arrivals (at most ~1.6 times a second) so the grid stays calm during a busy scan.
 			else if (!list.length || performance.now() - lastInsert > 600) insertFresh();
+			// Held back: come back for them even if nothing else changes (say, the scan just ended).
+			else scheduleUpdate();
 
 			const total = list.length;
 			empty.classList.toggle('is-hidden', total > 0);
@@ -2791,6 +2807,7 @@
 				buildGen++;
 				list = [];
 				rendered = 0;
+				want = 18;
 				consumed.clear();
 				keyCache.clear();
 				grid.textContent = '';
