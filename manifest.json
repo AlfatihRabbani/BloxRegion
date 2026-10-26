@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BloxRegion",
-  "version": "2.4.2",
+  "version": "2.4.3",
   "description": "Pick your Roblox server region in a Liquid Glass window, nearest servers first. Free and open source.",
   "short_name": "BloxRegion",
   "browser_specific_settings": {
