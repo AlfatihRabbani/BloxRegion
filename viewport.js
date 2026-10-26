@@ -6,7 +6,8 @@
  * opens it; it then stays on every roblox.com page, wherever it was dragged, until its X
  * is pressed. The state lives in storage, so every open tab agrees.
  *
- * The avatar is the player's real 3D avatar (avatar3d.js). Until it has loaded, or if it
+ * The avatar is the player's real 3D avatar (avatar3d.js), animated (animations.js): it
+ * idles, waves when clicked and dances when double-clicked. Until it has loaded, or if it
  * can't be, Roblox's bust render stands in: cut at the neck into a head layer and a torso
  * layer that are turned separately.
  */
@@ -181,7 +182,8 @@
 		x: null, y: null, pivot: null, neck: 0.64, cx: 0.5,
 		target: { yaw: 0, pitch: 0, body: 0 }, cur: { yaw: 0, pitch: 0, body: 0 }, raf: 0,
 		user: null, token: 0, drawn: false,
-		gl: null, r3d: null, headAt: 0.35, lastFrame: 0, load3d: 0, shotEl: null, shotTimer: 0, recall: null
+		gl: null, r3d: null, headAt: 0.35, lastFrame: 0, load3d: 0, shotEl: null, shotTimer: 0, recall: null,
+		anim: { name: 'idle', start: 0 }, fade: null
 	};
 
 	// ---------------------------------------------------------------------------
@@ -269,6 +271,13 @@
 		const body = document.createElement('div');
 		body.className = 'brv-body';
 		body.append(stage);
+		// A click waves; a double click dances until the next click.
+		body.addEventListener('click', () => {
+			if (V.r3d) play(V.anim.name === 'dance' ? 'idle' : 'wave');
+		});
+		body.addEventListener('dblclick', () => {
+			if (V.r3d) play('dance');
+		});
 		const shot = readShot();
 		if (shot) {
 			const img = document.createElement('img');
@@ -549,6 +558,41 @@
 		if (!V.raf && V.el) V.raf = requestAnimationFrame(tick);
 	}
 
+	// ---------------------------------------------------------------------------
+	// Animations (animations.js)
+	// ---------------------------------------------------------------------------
+
+	const FADE = 250; // ms to ease from one animation into the next
+
+	// Switches to another animation, easing over from whatever pose the avatar is in.
+	function play(name) {
+		const A = window.__brAnimations;
+		if (!A || !A.has(name)) return;
+		const now = performance.now();
+		V.fade = { from: animPose(now), start: now };
+		V.anim = { name, start: now };
+		kick();
+	}
+
+	// The joints' pose now: the idle animation unless another is playing (back to idle
+	// once a one-off ends), eased in from the previous pose for a moment after a switch.
+	function animPose(now) {
+		const A = window.__brAnimations;
+		if (!A) return {};
+		const { name, start } = V.anim;
+		if (!A.loops(name) && (now - start) / 1000 >= A.length(name)) {
+			V.fade = { from: A.sample(name, A.length(name)), start: now };
+			V.anim = { name: 'idle', start: now };
+		}
+		let pose = V.anim.name === 'idle' && REDUCED_MOTION ? {} : A.sample(V.anim.name, (now - V.anim.start) / 1000);
+		if (V.fade) {
+			const k = (now - V.fade.start) / FADE;
+			if (k >= 1) V.fade = null;
+			else pose = A.blend(V.fade.from, pose, k * k * (3 - 2 * k));
+		}
+		return pose;
+	}
+
 	function tick(now) {
 		V.raf = 0;
 		if (!V.el) return;
@@ -558,19 +602,21 @@
 			V.cur[k] = Math.abs(d) < 0.05 ? V.target[k] : V.cur[k] + d * 0.25;
 			if (V.cur[k] !== V.target[k]) moving = true;
 		}
-		// Turning renders every frame; the 3D avatar's idle breathing only needs 30 a second.
-		if (moving || now - V.lastFrame > 32) {
+		// Turning and animations render every frame; idling only needs 30 a second.
+		const animating = !!V.r3d && (V.anim.name !== 'idle' || !!V.fade);
+		if (moving || animating || now - V.lastFrame > 32) {
 			V.lastFrame = now;
 			render(now);
 		}
-		if (moving || (V.r3d && !REDUCED_MOTION)) V.raf = requestAnimationFrame(tick);
+		if (moving || animating || (V.r3d && !REDUCED_MOTION)) V.raf = requestAnimationFrame(tick);
 	}
 
 	function render(now) {
 		if (!V.el) return;
 		const { yaw, pitch, body } = V.cur;
 		if (V.r3d) {
-			V.r3d.render({ yaw, pitch, body, time: REDUCED_MOTION ? 0 : (now || performance.now()) / 1000 });
+			const t = now || performance.now();
+			V.r3d.render({ yaw, pitch, body, time: REDUCED_MOTION ? 0 : t / 1000, anim: animPose(t) });
 			return;
 		}
 		// Each layer's vanishing point is its own pivot: the head turns on the neck.

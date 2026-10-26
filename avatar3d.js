@@ -280,6 +280,19 @@
 	// with the legs. Pieces move whole, so nothing bends.
 	const LEGS = 0, BODY = 1, HEAD = 2;
 
+	// The skeleton, like Roblox's R15 rig: each piece hangs from one bone, and each bone
+	// turns on a joint (named as animations.js names them) relative to its parent.
+	// "Right" and "left" are the avatar's own: its right side is +X, on the viewer's left.
+	const BONES = ['root', 'lowerTorso', 'upperTorso', 'head',
+		'rightUpperArm', 'rightLowerArm', 'rightHand', 'leftUpperArm', 'leftLowerArm', 'leftHand',
+		'rightUpperLeg', 'rightLowerLeg', 'rightFoot', 'leftUpperLeg', 'leftLowerLeg', 'leftFoot'];
+	const PARENT = [-1, 0, 1, 2, 2, 4, 5, 2, 7, 8, 0, 10, 11, 0, 13, 14];
+	const JOINT = ['root', '', 'waist', 'neck', 'rightShoulder', 'rightElbow', 'rightWrist',
+		'leftShoulder', 'leftElbow', 'leftWrist', 'rightHip', 'rightKnee', 'rightAnkle',
+		'leftHip', 'leftKnee', 'leftAnkle'];
+	const LEFT = BONES.map(name => name.startsWith('left'));
+	const BONE = Object.fromEntries(BONES.map((name, i) => [name, i]));
+
 	// Works out where the neck is, to frame head and shoulders, and sorts the pieces into
 	// head, body and legs.
 	async function analyse(groups) {
@@ -383,23 +396,84 @@
 				}
 			}
 		}
+		// Bones: the head and what's on it; the torso (the body parts across the middle,
+		// upper above lower); each arm and leg from the top down (upper, lower, hand or
+		// foot); anything else on the body hangs from the upper torso, and anything else on
+		// the legs (trousers, a skirt) from the hips.
+		const cx = center[0], cz = center[1];
+		const bone = new Uint8Array(count).fill(BONE.upperTorso);
+		// Across the middle: well onto both sides of it (an upper leg can just touch it).
+		const across = k => {
+			const w = (highest(k, 0) - lowest(k, 0)) * 0.2;
+			return lowest(k, 0) < cx - w && highest(k, 0) > cx + w;
+		};
+		const sideOf = k => (mid(k, 0) >= cx ? 0 : 1); // 0: the avatar's right, 1: its left
+		const torso = [], arms = [[], []], legSides = [[], []];
+		for (let k = 0; k < count; k++) {
+			if (joint[k] === HEAD) bone[k] = BONE.head;
+			else if (joint[k] === LEGS) {
+				if (!accessory(k) && !across(k)) legSides[sideOf(k)].push(k);
+				else bone[k] = BONE.root;
+			} else if (!accessory(k)) (across(k) ? torso : arms[sideOf(k)]).push(k);
+		}
+		const downward = list => list.sort((a, b) => mid(b, 1) - mid(a, 1));
+		downward(torso).forEach((k, i) => { bone[k] = i ? BONE.lowerTorso : BONE.upperTorso; });
+		// A limb's pieces from the top: upper, then lower, the last one the hand or foot.
+		const chain = (list, names) => {
+			downward(list).forEach((k, i) => {
+				bone[k] = BONE[names[i === 0 ? 0 : i === list.length - 1 && list.length > 2 ? 2 : 1]];
+			});
+		};
+		chain(arms[0], ['rightUpperArm', 'rightLowerArm', 'rightHand']);
+		chain(arms[1], ['leftUpperArm', 'leftLowerArm', 'leftHand']);
+		chain(legSides[0], ['rightUpperLeg', 'rightLowerLeg', 'rightFoot']);
+		chain(legSides[1], ['leftUpperLeg', 'leftLowerLeg', 'leftFoot']);
+
+		// Where each joint is: the file has no skeleton, so it's worked out from the pieces
+		// (a shoulder near the top of its upper arm, an elbow where the upper and lower arm
+		// meet...). A bone with no pieces turns where its parent does.
+		const first = b => { for (let k = 0; k < count; k++) if (bone[k] === b) return k; return -1; };
+		const pivots = new Array(BONES.length * 3).fill(0);
+		const setPivot = (b, x, y, z) => { pivots[b * 3] = x; pivots[b * 3 + 1] = y; pivots[b * 3 + 2] = z; };
+		const lower = first(BONE.lowerTorso), upper = first(BONE.upperTorso);
+		const hips = lower >= 0 ? lowest(lower, 1) : upper >= 0 ? lowest(upper, 1) : floor + below * 0.5;
+		setPivot(BONE.root, cx, hips, cz);
+		setPivot(BONE.lowerTorso, cx, hips, cz);
+		setPivot(BONE.upperTorso, cx, lower >= 0 && upper >= 0 ? (highest(lower, 1) + lowest(upper, 1)) / 2 : hips, cz);
+		setPivot(BONE.head, cx, neck, cz);
+		const limb = (names, top) => {
+			const [a, b, c] = names.map(n => BONE[n]);
+			const [ka, kb, kc] = [first(a), first(b), first(c)];
+			const p = PARENT[a] * 3;
+			if (ka < 0) setPivot(a, pivots[p], pivots[p + 1], pivots[p + 2]);
+			else setPivot(a, mid(ka, 0), highest(ka, 1) - (highest(ka, 0) - lowest(ka, 0)) * top, mid(ka, 2));
+			if (kb < 0) setPivot(b, pivots[a * 3], pivots[a * 3 + 1], pivots[a * 3 + 2]);
+			else setPivot(b, mid(kb, 0), ka >= 0 ? (highest(kb, 1) + lowest(ka, 1)) / 2 : highest(kb, 1), mid(kb, 2));
+			if (kc < 0) setPivot(c, pivots[b * 3], pivots[b * 3 + 1], pivots[b * 3 + 2]);
+			else setPivot(c, mid(kc, 0), kb >= 0 ? (highest(kc, 1) + lowest(kb, 1)) / 2 : highest(kc, 1), mid(kc, 2));
+		};
+		limb(['rightUpperArm', 'rightLowerArm', 'rightHand'], 0.35);
+		limb(['leftUpperArm', 'leftLowerArm', 'leftHand'], 0.35);
+		limb(['rightUpperLeg', 'rightLowerLeg', 'rightFoot'], 0.25);
+		limb(['leftUpperLeg', 'leftLowerLeg', 'leftFoot'], 0.25);
 		await sleep(0);
-		// Each group split by where its pieces go, copying runs of triangles at a time.
+
+		// Each group split by bone, copying runs of triangles at a time.
 		const parts = [];
 		const T = 3 * STRIDE;
 		for (const g of groups) {
-			const size = [0, 0, 0];
-			for (const piece of g.pieces) size[joint[piece]]++;
-			const out = size.map(n => n ? new Float32Array(n * T) : null), at = [0, 0, 0];
+			const size = new Array(BONES.length).fill(0);
+			for (const piece of g.pieces) size[bone[piece]]++;
+			const out = size.map(n => n ? new Float32Array(n * T) : null), at = new Array(BONES.length).fill(0);
 			for (let t = 0; t < g.pieces.length;) {
-				const j = joint[g.pieces[t]];
+				const b = bone[g.pieces[t]];
 				let end = t + 1;
-				while (end < g.pieces.length && joint[g.pieces[end]] === j) end++;
-				out[j].set(g.data.subarray(t * T, end * T), at[j]);
-				at[j] += (end - t) * T;
+				while (end < g.pieces.length && bone[g.pieces[end]] === b) end++;
+				out[b].set(g.data.subarray(t * T, end * T), at[b]);
+				at[b] += (end - t) * T;
 				t = end;
 			}
-			for (const j of [LEGS, BODY, HEAD]) if (out[j]) parts.push({ name: g.name, material: g.material, alpha: g.alpha, data: out[j], joint: j });
+			out.forEach((data, b) => { if (data) parts.push({ name: g.name, material: g.material, alpha: g.alpha, data, bone: b }); });
 		}
 
 		// Like the inventory view: from the hands to just over the head (and the hat, within
@@ -410,6 +484,7 @@
 			parts,
 			axis: center,
 			neck,
+			pivots,
 			// No separate head (one piece from head to body): the body turns all the way.
 			headless: !heads,
 			view: { center: [center[0], (bottom + top) / 2, center[1]], height: top - bottom },
@@ -440,6 +515,10 @@
 		rotX(t) {
 			const c = Math.cos(t), s = Math.sin(t);
 			return [1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1];
+		},
+		rotZ(t) {
+			const c = Math.cos(t), s = Math.sin(t);
+			return [c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 		},
 		// Rotation about a point.
 		about(p, r) {
@@ -543,15 +622,15 @@ void main() {
 			gl.bufferData(gl.ARRAY_BUFFER, part.data, gl.STATIC_DRAW);
 			const d = info.d !== undefined ? parseFloat(info.d) : 1;
 			return {
-				buf, count: part.data.length / STRIDE, joint: part.joint,
+				buf, count: part.data.length / STRIDE, bone: part.bone,
 				kd: kd.every(Number.isFinite) ? kd : [1, 1, 1],
 				map: textureHash(info.map_kd, model.textures || []),
 				cutout: info.rbx_alphamode === 'transparent' || part.alpha,
 				opacity: Number.isFinite(d) ? d : 1
 			};
 		});
-		// Opaque first, then anything see-through; by joint within those, to switch less.
-		items.sort((a, b) => (a.opacity < 1) - (b.opacity < 1) || a.joint - b.joint);
+		// Opaque first, then anything see-through; by bone within those, to switch less.
+		items.sort((a, b) => (a.opacity < 1) - (b.opacity < 1) || a.bone - b.bone);
 
 		let frameRequested = null;
 		const hashes = [...new Set(items.map(i => i.map).filter(Boolean))];
@@ -610,6 +689,38 @@ void main() {
 		const proj = M.perspective(fov, canvas.width / canvas.height, dist * 0.05, dist * 20);
 		const viewProj = M.mul(proj, M.lookAt(eye, center, [0, 1, 0]));
 
+		// Each bone's matrix. Like the inventory: the head looks at the cursor (turning and
+		// nodding on the neck), the body (torso and arms) turns part of the way and breathes,
+		// and the legs stay where they stand; then the animation's joint turns (pose.anim:
+		// joint name -> [x, y, z] degrees, plus "move" for the whole avatar, in studs), each
+		// about its joint and carried along by its parent. Left-side joints are mirrored, so
+		// the same numbers pose either side the same way.
+		const P = model.pivots;
+		const at = b => [P[b * 3], P[b * 3 + 1], P[b * 3 + 2]];
+		function pose3d(pose) {
+			const anim = pose.anim || {};
+			const turnOf = (name, left) => {
+				const r = anim[name];
+				if (!r) return M.identity();
+				const s = left ? -1 : 1;
+				return M.mul(M.rotY(s * r[1] * DEG), M.mul(M.rotX(r[0] * DEG), M.rotZ(s * r[2] * DEG)));
+			};
+			const [ax, az] = model.axis;
+			const turn = model.headless ? pose.yaw : pose.body;
+			const breathe = Math.sin(pose.time * 2.1) * model.view.height * 0.004;
+			const move = anim.move || [0, 0, 0];
+			const out = new Array(BONES.length);
+			for (let b = 0; b < BONES.length; b++) {
+				let m;
+				if (b === BONE.root) m = M.mul(M.translate(move[0], move[1], move[2]), M.about(at(b), turnOf('root')));
+				else if (b === BONE.lowerTorso) m = M.mul(out[0], M.mul(M.translate(0, breathe, 0), M.about([ax, 0, az], M.rotY(turn * DEG))));
+				else if (b === BONE.head) m = M.mul(out[PARENT[b]], M.about(at(b), M.mul(M.rotY((pose.yaw - turn) * DEG), M.mul(M.rotX(pose.pitch * DEG), turnOf('neck')))));
+				else m = M.mul(out[PARENT[b]], M.about(at(b), turnOf(JOINT[b], LEFT[b])));
+				out[b] = m;
+			}
+			return out;
+		}
+
 		function render(pose) {
 			if (lost) return;
 			gl.viewport(0, 0, canvas.width, canvas.height);
@@ -622,22 +733,13 @@ void main() {
 			gl.uniform3fv(loc.uEye, eye);
 			gl.uniform1i(loc.uMap, 0);
 
-			// Like the inventory: the head looks at the cursor (turning and nodding on the neck),
-			// the body (torso and arms) turns part of the way and breathes, and the legs stay
-			// where they stand.
-			const [ax, az] = model.axis;
-			const breathe = Math.sin(pose.time * 2.1) * model.view.height * 0.004;
-			const turn = model.headless ? pose.yaw : pose.body;
-			const body = M.mul(M.translate(0, breathe, 0), M.about([ax, 0, az], M.rotY(turn * DEG)));
-			const head = M.mul(body, M.about([ax, model.neck, az], M.mul(M.rotY((pose.yaw - turn) * DEG), M.rotX(pose.pitch * DEG))));
-			const joints = [M.identity(), body, head];
-			let joint = -1;
-
+			const bones = pose3d(pose);
+			let bone = -1;
 			for (const item of items) {
-				if (item.joint !== joint) {
-					joint = item.joint;
-					gl.uniformMatrix4fv(loc.uModel, false, joints[joint]);
-					gl.uniformMatrix3fv(loc.uNormal, false, M.normal3(joints[joint]));
+				if (item.bone !== bone) {
+					bone = item.bone;
+					gl.uniformMatrix4fv(loc.uModel, false, bones[bone]);
+					gl.uniformMatrix3fv(loc.uNormal, false, M.normal3(bones[bone]));
 				}
 				gl.uniform3fv(loc.uKd, item.kd);
 				const tex = item.map && textures.get(item.map);
@@ -739,7 +841,7 @@ void main() {
 	// the next page draws it from there at once instead of downloading and parsing it again
 	// while the page itself is loading. (Firefox stores typed arrays as they are.)
 	const CACHE_KEY = 'brAvatar3d';
-	const CACHE_FORMAT = 5;
+	const CACHE_FORMAT = 6;
 
 	// The kept avatar if it's this player's: { url, model, recalled: true }, or null.
 	function recall(userId) {
