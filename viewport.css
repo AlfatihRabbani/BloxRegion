@@ -119,6 +119,20 @@
 	width: 184px;
 	height: 184px;
 }
+/* The 3D avatar fades in over the 2D one once it has loaded. */
+#br-viewport .brv-3d {
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 184px;
+	height: 188px;
+	opacity: 0;
+	transition: opacity 280ms steps(4, end);
+	pointer-events: none;
+}
+#br-viewport.is-3d .brv-3d {
+	opacity: 1;
+}
 /* 14 canvas px (28 CSS px) wider on each side and taller below than the frame. */
 #br-viewport .brv-torso {
 	left: -28px;

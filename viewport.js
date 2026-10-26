@@ -7,8 +7,9 @@
  * page, wherever it was dragged, until its X is pressed. The state lives in storage, so
  * every open tab agrees.
  *
- * The avatar is Roblox's bust render, cut at the neck into a head layer and a torso
- * layer that are turned separately in 3D.
+ * The avatar is the player's real 3D avatar (avatar3d.js). Until it has loaded, or if it
+ * can't be, Roblox's bust render stands in: cut at the neck into a head layer and a torso
+ * layer that are turned separately.
  */
 (() => {
 	'use strict';
@@ -21,6 +22,10 @@
 	const R = 92;                      // avatar layers are drawn at 92×92 and shown at 2×
 	const P = 14;                      // the torso layer reaches this far past the frame (sides, below)
 	const SRC = 150;                   // size of the bust render that is measured
+	const MODEL_TTL = 10 * 60 * 1000;  // how long a known 3D avatar link is used before asking again
+	const REDUCED_MOTION = (() => {
+		try { return matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; }
+	})();
 
 	// 5×8 pixel font for usernames. Each glyph is its character followed by eight base-32
 	// digits, one per row (5 bits, leftmost pixel first); row 7 holds descenders.
@@ -171,7 +176,8 @@
 		el: null, bar: null, nameSlot: null, head: null, torso: null, stage: null,
 		x: null, y: null, pivot: null, neck: 0.64, cx: 0.5,
 		target: { yaw: 0, pitch: 0, body: 0 }, cur: { yaw: 0, pitch: 0, body: 0 }, raf: 0,
-		user: null, token: 0, drawn: false
+		user: null, token: 0, drawn: false,
+		gl: null, r3d: null, headAt: 0.35, lastFrame: 0
 	};
 
 	function mount(animate) {
@@ -205,9 +211,14 @@
 		const stage = document.createElement('div');
 		stage.className = 'brv-stage';
 		stage.append(torso, head);
+		// The 3D avatar, drawn at half size and shown at 2× for chunky pixels.
+		const gl = document.createElement('canvas');
+		gl.className = 'brv-3d';
+		gl.width = 92;
+		gl.height = 94;
 		const body = document.createElement('div');
 		body.className = 'brv-body';
-		body.append(stage);
+		body.append(stage, gl);
 
 		const el = document.createElement('div');
 		el.id = 'br-viewport';
@@ -215,7 +226,7 @@
 		if (animate) el.className = 'is-opening';
 		el.setAttribute('role', 'dialog');
 		el.append(bar, body);
-		Object.assign(V, { el, bar, nameSlot, head, torso, stage, pivot: null, drawn: false });
+		Object.assign(V, { el, bar, nameSlot, head, torso, stage, gl, body, pivot: null, drawn: false, r3d: null });
 		bar.addEventListener('pointerdown', startDrag);
 		document.body.append(el);
 		place(V.x, V.y);
@@ -227,6 +238,8 @@
 
 	function unmount() {
 		if (!V.el) return;
+		if (V.r3d) V.r3d.destroy();
+		V.r3d = null;
 		V.el.remove();
 		V.el = null;
 		V.token++;
@@ -315,12 +328,53 @@
 		}
 		V.user = user;
 		showUser(user);
+		const same = !!cached && cached.id === user.id;
+		load3d(user, same ? cached : null, token);
 		const bust = await bustUrl(user.id);
 		if (token !== V.token) return;
-		if (bust && (!V.drawn || !cached || cached.bust !== bust || cached.id !== user.id)) await showBust(bust, token);
+		if (bust && (!V.drawn || !same || cached.bust !== bust)) await showBust(bust, token);
 		if (token !== V.token) return;
 		if (!V.drawn) drawAvatar();
-		store.set({ [USER_KEY]: { id: user.id, name: user.name, bust: bust || null } });
+		saveUser(same ? { name: user.name, bust: bust || null } : { id: user.id, name: user.name, bust: bust || null, model: null, modelAt: 0 });
+	}
+
+	function saveUser(patch) {
+		store.get([USER_KEY]).then(v => store.set({ [USER_KEY]: Object.assign({}, v[USER_KEY], patch) }));
+	}
+
+	// The real 3D avatar, faded in over the 2D one once it has loaded.
+	async function load3d(user, cached, token) {
+		const A = window.__brAvatar3d;
+		if (!A || !A.supported()) return;
+		const known = cached && cached.model && Date.now() - (cached.modelAt || 0) < MODEL_TTL ? cached.model : null;
+		let loaded = null;
+		try {
+			loaded = await A.load(user.id, known);
+		} catch (e) {
+			// A remembered link can go stale when the avatar changes; ask Roblox again.
+			if (known && token === V.token) {
+				try { loaded = await A.load(user.id, null); } catch (e2) {}
+			}
+		}
+		if (!loaded || token !== V.token || !V.el) return;
+		let renderer;
+		try {
+			renderer = A.createRenderer(V.gl, loaded.model, () => {
+				if (V.r3d !== renderer) return;
+				V.r3d = null;
+				if (V.el) V.el.classList.remove('is-3d');
+				V.pivot = null;
+			});
+		} catch (e) {
+			return;
+		}
+		V.r3d = renderer;
+		V.headAt = loaded.model.headAt;
+		V.pivot = null;
+		renderer.onChange(kick);
+		V.el.classList.add('is-3d');
+		kick();
+		if (loaded.url !== known) saveUser({ model: loaded.url, modelAt: Date.now() });
 	}
 
 	async function showBust(url, token) {
@@ -337,20 +391,31 @@
 	function onPointer(e) {
 		if (!V.el) return;
 		if (!V.pivot) {
-			const r = V.stage.getBoundingClientRect();
-			// Roughly between the eyes: a little above the middle of the head.
-			V.pivot = { x: r.left + r.width * V.cx, y: r.top + r.height * V.neck * 0.62 };
+			if (V.r3d) {
+				const r = V.body.getBoundingClientRect();
+				V.pivot = { x: r.left + r.width / 2, y: r.top + r.height * V.headAt };
+			} else {
+				const r = V.stage.getBoundingClientRect();
+				// Roughly between the eyes: a little above the middle of the head.
+				V.pivot = { x: r.left + r.width * V.cx, y: r.top + r.height * V.neck * 0.62 };
+			}
 		}
-		// Minecraft's inventory model: atan of the offset, the head turning further than the body.
+		// Minecraft's inventory model: atan of the offset, the head turning further than the
+		// body. A real 3D head can turn as far as Minecraft's; the flat one turns less.
 		const f = Math.atan((e.clientX - V.pivot.x) / 90);
 		const g = Math.atan((e.clientY - V.pivot.y) / 90);
-		V.target.yaw = f * 22;
-		V.target.pitch = -g * 12;
-		V.target.body = f * 8;
-		if (!V.raf) V.raf = requestAnimationFrame(tick);
+		const k = V.r3d ? [38, 22, 17] : [22, 12, 8];
+		V.target.yaw = f * k[0];
+		V.target.pitch = -g * k[1];
+		V.target.body = f * k[2];
+		kick();
 	}
 
-	function tick() {
+	function kick() {
+		if (!V.raf && V.el) V.raf = requestAnimationFrame(tick);
+	}
+
+	function tick(now) {
 		V.raf = 0;
 		if (!V.el) return;
 		let moving = false;
@@ -359,13 +424,21 @@
 			V.cur[k] = Math.abs(d) < 0.05 ? V.target[k] : V.cur[k] + d * 0.25;
 			if (V.cur[k] !== V.target[k]) moving = true;
 		}
-		render();
-		if (moving) V.raf = requestAnimationFrame(tick);
+		// Turning renders every frame; the 3D avatar's idle breathing only needs 30 a second.
+		if (moving || now - V.lastFrame > 32) {
+			V.lastFrame = now;
+			render(now);
+		}
+		if (moving || (V.r3d && !REDUCED_MOTION)) V.raf = requestAnimationFrame(tick);
 	}
 
-	function render() {
+	function render(now) {
 		if (!V.el) return;
 		const { yaw, pitch, body } = V.cur;
+		if (V.r3d) {
+			V.r3d.render({ yaw, pitch, body, time: REDUCED_MOTION ? 0 : (now || performance.now()) / 1000 });
+			return;
+		}
 		// Each layer's vanishing point is its own pivot: the head turns on the neck.
 		V.torso.style.transform = `perspective(520px) rotateY(${body.toFixed(2)}deg)`;
 		V.head.style.transform = `translateX(${(yaw * 0.06).toFixed(2)}px) perspective(420px) rotateY(${yaw.toFixed(2)}deg) rotateX(${pitch.toFixed(2)}deg)`;

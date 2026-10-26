@@ -91,7 +91,7 @@ async function brAttachToOpenTabs() {
     if (running) continue;
     try {
       await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ['bloxregion.css', 'viewport.css'] });
-      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['viewport.js', 'regionSelector.js'] });
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['avatar3d.js', 'viewport.js', 'regionSelector.js'] });
     } catch (e) {}
   }
 }

@@ -24,6 +24,7 @@
         "*://*.roblox.com/*"
       ],
       "js": [
+        "avatar3d.js",
         "viewport.js",
         "regionSelector.js"
       ],
