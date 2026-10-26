@@ -116,16 +116,18 @@
 	// position (3), normal (3), uv (2), colour (4). Works in short slices so a big avatar
 	// never holds up the page.
 	//
-	// Each triangle also gets the piece it belongs to: the connected mesh (head, hair, an
-	// arm...), with vertices at the same spot counted as one, since files often repeat them
-	// along seams and hard edges.
+	// Each triangle also gets the piece it belongs to (the head, a hat, an upper arm...): its
+	// object, as Roblox writes each body part and accessory as one (Player1, Handle1...). In
+	// a file without objects, the connected mesh, with vertices at the same spot counted as
+	// one, since files often repeat them along seams and hard edges. (Not across objects:
+	// Roblox's body parts meet exactly at the joints.)
 	const STRIDE = 12;
 	async function parseObj(text) {
 		const P = [], N = [], T = [], C = [];
 		const groups = new Map();
 		let name = '', material = '', group = null, hasAlpha = false;
 		const corner = [];
-		const spot = new Map(), spotOf = [], parent = [];
+		const spot = new Map(), spotOf = [], parent = [], objects = new Map();
 		const find = i => {
 			while (parent[i] !== i) i = parent[i] = parent[parent[i]];
 			return i;
@@ -194,16 +196,25 @@
 					corner.push(v, t, n);
 				}
 				if (corner[0] < 0 || corner[0] * 3 + 2 >= P.length) continue;
-				const root = find(weld(corner[0]));
-				for (let k = 3; k < corner.length; k += 3) {
-					if (corner[k] >= 0 && corner[k] * 3 + 2 < P.length) {
-						const other = find(weld(corner[k]));
-						if (other !== root) parent[other] = find(root);
+				let piece;
+				if (name) {
+					piece = objects.get(name);
+					if (piece === undefined) {
+						objects.set(name, piece = parent.length);
+						parent.push(piece);
+					}
+				} else {
+					piece = find(weld(corner[0]));
+					for (let k = 3; k < corner.length; k += 3) {
+						if (corner[k] >= 0 && corner[k] * 3 + 2 < P.length) {
+							const other = find(weld(corner[k]));
+							if (other !== piece) parent[other] = piece;
+						}
 					}
 				}
 				for (let k = 1; k + 1 < corner.length / 3; k++) {
 					emit(group, P, N, T, C, corner, 0, k, k + 1);
-					group.pieces.push(spotOf[corner[0]]);
+					group.pieces.push(piece);
 				}
 				if (hasAlpha) for (let k = 0; k < corner.length; k += 3) if (C[corner[k] * 4 + 3] < 1) group.alpha = true;
 			}
@@ -275,48 +286,17 @@
 		for (const g of groups) g.box = bounds(g.data);
 		const all = { min: [0, 1, 2].map(k => Math.min(...groups.map(g => g.box.min[k]))), max: [0, 1, 2].map(k => Math.max(...groups.map(g => g.box.max[k]))) };
 		const height = all.max[1] - all.min[1];
-		// How wide the avatar is at each height.
-		const bins = 96, lo = new Array(bins).fill(Infinity), hi = new Array(bins).fill(-Infinity);
-		const binOf = y => Math.max(0, Math.min(bins - 1, Math.floor((y - all.min[1]) / height * bins)));
-		const perBin = bins / height;
-		for (const g of groups) {
-			const d = g.data;
-			for (let i = 0; i < d.length; i += STRIDE) {
-				let b = ((d[i + 1] - all.min[1]) * perBin) | 0;
-				if (b >= bins) b = bins - 1;
-				if (d[i] < lo[b]) lo[b] = d[i];
-				if (d[i] > hi[b]) hi[b] = d[i];
-			}
-		}
-		await sleep(0);
-		const width = b => hi[b] - lo[b]; // -Infinity where a slice has no vertices
-		const named = groups.filter(g => /(^|[^a-z])head\d*$/i.test(g.name));
-		let neck, headBox;
-		if (named.length) {
-			neck = Math.min(...named.map(g => g.box.min[1]));
-			headBox = { min: [0, 1, 2].map(k => Math.min(...named.map(g => g.box.min[k]))), max: [0, 1, 2].map(k => Math.max(...named.map(g => g.box.max[k]))) };
-		} else {
-			// Unnamed parts: the neck is the narrowest slice between the shoulders and the head.
-			let best = -1;
-			for (let b = Math.floor(bins * 0.55); b < Math.floor(bins * 0.9); b++) {
-				if (width(b) > 0 && (best < 0 || width(b) < width(best))) best = b;
-			}
-			neck = all.min[1] + height * (best < 0 ? 0.78 : best / bins);
-			const top = Math.min(all.max[1], neck + height * 0.25);
-			headBox = { min: [all.min[0], neck, all.min[2]], max: [all.max[0], top, all.max[2]] };
-		}
-		const headH = Math.max(headBox.max[1] - neck, height * 0.08);
-		const pivot = [(headBox.min[0] + headBox.max[0]) / 2, neck, (headBox.min[2] + headBox.max[2]) / 2];
 
-		// Each piece's extent: x0, x1, y0, y1, z0, z1.
+		// Each piece's extent (x0, x1, y0, y1, z0, z1) and object name.
 		let count = 0;
 		for (const g of groups) for (const piece of g.pieces) count = Math.max(count, piece + 1);
-		const box = new Float64Array(count * 6);
+		const box = new Float64Array(count * 6), nameOf = [];
 		for (let k = 0; k < count; k++) box.set([Infinity, -Infinity, Infinity, -Infinity, Infinity, -Infinity], k * 6);
 		for (const g of groups) {
 			const d = g.data;
 			for (let t = 0, i = 0; t < g.pieces.length; t++) {
 				const b = g.pieces[t] * 6;
+				nameOf[g.pieces[t]] = g.name;
 				for (let end = i + 3 * STRIDE; i < end; i += STRIDE) {
 					for (let a = 0; a < 3; a++) {
 						const v = d[i + a];
@@ -326,17 +306,57 @@
 				}
 			}
 		}
+		await sleep(0);
 		const lowest = (k, a) => box[k * 6 + a * 2], highest = (k, a) => box[k * 6 + a * 2 + 1];
 		const mid = (k, a) => (lowest(k, a) + highest(k, a)) / 2;
 		const overlap = (k, m, a) => Math.min(highest(k, a), highest(m, a)) - Math.max(lowest(k, a), lowest(m, a));
 
-		// The head and what's on it (hair down the back too).
+		// The head: the object named Head, or else the topmost body part (Roblox names body
+		// parts Player1, Player2... and accessories Handle1...). In a file without objects,
+		// the neck is the narrowest slice between the shoulders and the top.
+		const accessory = k => /^handle\d*$/i.test(nameOf[k] || '');
+		const bodyPart = k => !!nameOf[k] && !accessory(k);
+		let head = -1;
+		for (let k = 0; k < count; k++) if (/(^|[^a-z])head\d*$/i.test(nameOf[k] || '')) head = k;
+		if (head < 0) for (let k = 0; k < count; k++) if (bodyPart(k) && (head < 0 || highest(k, 1) > highest(head, 1))) head = k;
+		let neck, headTop, center;
+		if (head >= 0) {
+			neck = lowest(head, 1);
+			headTop = highest(head, 1);
+			center = [mid(head, 0), mid(head, 2)];
+		} else {
+			const bins = 96, lo = new Array(bins).fill(Infinity), hi = new Array(bins).fill(-Infinity);
+			const perBin = bins / height;
+			for (const g of groups) {
+				const d = g.data;
+				for (let i = 0; i < d.length; i += STRIDE) {
+					let b = ((d[i + 1] - all.min[1]) * perBin) | 0;
+					if (b >= bins) b = bins - 1;
+					if (d[i] < lo[b]) lo[b] = d[i];
+					if (d[i] > hi[b]) hi[b] = d[i];
+				}
+			}
+			const width = b => hi[b] - lo[b]; // -Infinity where a slice has no vertices
+			let best = -1;
+			for (let b = Math.floor(bins * 0.55); b < Math.floor(bins * 0.9); b++) {
+				if (width(b) > 0 && (best < 0 || width(b) < width(best))) best = b;
+			}
+			neck = all.min[1] + height * (best < 0 ? 0.78 : best / bins);
+			headTop = Math.min(all.max[1], neck + height * 0.25);
+			center = [(all.min[0] + all.max[0]) / 2, (all.min[2] + all.max[2]) / 2];
+		}
+		const headH = Math.max(headTop - neck, height * 0.08);
+
+		// With the head: what's on it (hats, hair, down the back too). Other body parts never.
 		const joint = new Uint8Array(count).fill(BODY);
-		let heads = 0;
+		let heads = 0, stuffTop = headTop;
 		for (let k = 0; k < count; k++) {
-			if (mid(k, 1) >= neck || (highest(k, 1) >= neck + headH * 0.5 && mid(k, 1) >= neck - headH * 1.2)) {
+			const onHead = k === head || (!(head >= 0 && bodyPart(k)) &&
+				(mid(k, 1) >= neck || (highest(k, 1) >= neck + headH * 0.5 && mid(k, 1) >= neck - headH * 1.2)));
+			if (onHead) {
 				joint[k] = HEAD;
 				heads++;
+				stuffTop = Math.max(stuffTop, highest(k, 1));
 			}
 		}
 		// The legs: what stands on the floor (feet, shoes, a long skirt), then whatever sits
@@ -382,15 +402,17 @@
 			for (const j of [LEGS, BODY, HEAD]) if (out[j]) parts.push({ name: g.name, material: g.material, alpha: g.alpha, data: out[j], joint: j });
 		}
 
-		// Head and shoulders, like the inventory view: from mid-chest to just over the head.
-		const bottom = neck - headH * 1.1, top = neck + headH * 1.35;
+		// Like the inventory view: from the hands to just over the head (and the hat, within
+		// reason).
+		const bottom = neck - headH * 1.75;
+		const top = Math.min(Math.max(neck + headH * 1.35, stuffTop + headH * 0.08), neck + headH * 2);
 		return {
 			parts,
-			axis: [pivot[0], pivot[2]],
+			axis: center,
 			neck,
 			// No separate head (one piece from head to body): the body turns all the way.
 			headless: !heads,
-			view: { center: [pivot[0], (bottom + top) / 2, pivot[2]], height: top - bottom },
+			view: { center: [center[0], (bottom + top) / 2, center[1]], height: top - bottom },
 			headAt: (top - (neck + headH * 0.5)) / (top - bottom)
 		};
 	}
@@ -717,7 +739,7 @@ void main() {
 	// the next page draws it from there at once instead of downloading and parsing it again
 	// while the page itself is loading. (Firefox stores typed arrays as they are.)
 	const CACHE_KEY = 'brAvatar3d';
-	const CACHE_FORMAT = 4;
+	const CACHE_FORMAT = 5;
 
 	// The kept avatar if it's this player's: { url, model, recalled: true }, or null.
 	function recall(userId) {
