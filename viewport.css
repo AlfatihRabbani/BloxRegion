@@ -32,7 +32,8 @@
 #br-viewport div,
 #br-viewport span,
 #br-viewport button,
-#br-viewport canvas {
+#br-viewport canvas,
+#br-viewport img {
 	box-sizing: border-box;
 	margin: 0;
 	padding: 0;
@@ -132,6 +133,21 @@
 }
 #br-viewport.is-3d .brv-3d {
 	opacity: 1;
+}
+/* Coming from a saved frame of the same avatar: no fade, it just carries on. */
+#br-viewport.is-instant .brv-3d {
+	transition: none;
+}
+/* The last frame from the previous page, shown until the live avatar is ready. */
+#br-viewport .brv-shot {
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 184px;
+	height: 188px;
+	display: block;
+	image-rendering: pixelated;
+	image-rendering: crisp-edges;
 }
 /* 14 canvas px (28 CSS px) wider on each side and taller below than the frame. */
 #br-viewport .brv-torso {
