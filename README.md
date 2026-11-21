@@ -50,12 +50,14 @@ Press <kbd>/</kbd> anywhere in the window (or type `/` in the search field) to o
 | `/nearest` | Open the region closest to you |
 | `/join` | Join the best server near you |
 | `/refresh` | Scan all servers again |
+| `/auto-reload` | Scan all servers again every few minutes: choose how often, and whether to wait until each scan has finished |
 | `/home` | Back to the overview |
 | `/list` | Every region with its server count |
 | `/version` | Show the installed version |
 | `/update` | Install a downloaded update, or check for one |
 | `/credits` | Show credits |
 | `/contacts` | Show contact links |
+| `/diagnose` | Copy a report of which server addresses were found and where each was placed, to share when a region looks wrong |
 | `/exit` | Close the window |
 | `/<country or city>` | e.g. `/singapore`, `/tokyo`, `/frankfurt`: open that region |
 | `/<region code>` | e.g. `/sg`, `/us-ca`, `/de`: open that region |
