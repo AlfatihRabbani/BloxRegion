@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.4.7
+
+- **Auto-reload** — type `/auto-reload` to have BloxRegion scan every server
+  again on a timer, so the list isn't full of emptied or closed servers when you
+  come back to it. Pick how many minutes, and whether the timer waits until the
+  whole server list has loaded (so a reload never cuts a scan short). A
+  countdown next to the refresh button shows when the next reload is; click it
+  to change or turn it off. A reload due while the tab is in the background
+  happens when you return to it.
+- **`/diagnose`** — copies a short report of which server address ranges a scan
+  found and where each one was placed. If a region looks wrong (for example a
+  nearby one showing no servers), paste the report into an issue so it can be
+  fixed. It contains no account details.
+
 ## 2.4.6
 
 - Bug fixes and small improvements.

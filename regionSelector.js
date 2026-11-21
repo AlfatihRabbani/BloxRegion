@@ -324,7 +324,10 @@
 		link: [['path', { d: 'M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1.2 1.2' }], ['path', { d: 'M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1.2-1.2' }]],
 		sparkle: [['path', { d: 'M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9z' }], ['path', { d: 'M18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z' }]],
 		warn: [['path', { d: 'M10.3 4.6L3.2 17.2a2 2 0 0 0 1.7 3h14.2a2 2 0 0 0 1.7-3L13.7 4.6a2 2 0 0 0-3.4 0z' }], ['path', { d: 'M12 9.5v4.5M12 17h.01' }]],
-		download: [['path', { d: 'M12 4v11' }], ['path', { d: 'M7.5 10.5L12 15l4.5-4.5' }], ['path', { d: 'M5 19.5h14' }]]
+		download: [['path', { d: 'M12 4v11' }], ['path', { d: 'M7.5 10.5L12 15l4.5-4.5' }], ['path', { d: 'M5 19.5h14' }]],
+		clock: [['circle', { cx: 12, cy: 12, r: 8.5 }], ['path', { d: 'M12 7.5V12l3 2' }]],
+		minus: [['path', { d: 'M6.5 12h11' }]],
+		plus: [['path', { d: 'M12 6.5v11M6.5 12h11' }]]
 	};
 	const FILLED_ICONS = new Set(['play', 'star']);
 
@@ -836,13 +839,13 @@
 		if (parts.length !== 4) return null;
 		if (parts[0] === '128' && parts[1] === '116') {
 			const b = ROBLOX_SUBNETS[parts[2]];
-			if (b) return { code: b[0], city: b[1], la: b[2], lo: b[3] };
+			if (b) return { code: b[0], city: b[1], la: b[2], lo: b[3], src: 'built-in' };
 		}
 		const aws = awsDatacenter(address);
-		if (aws) return aws;
+		if (aws) return Object.assign({ src: 'AWS ranges' }, aws);
 		const subnet = parts.slice(0, 3).join('.') + '.0';
 		const cached = S.subnetCache.get(subnet);
-		if (cached) return { code: cached[0], city: cached[1], la: cached[2], lo: cached[3] };
+		if (cached) return { code: cached[0], city: cached[1], la: cached[2], lo: cached[3], src: 'saved lookup' };
 		if (subnetInflight.has(subnet)) return subnetInflight.get(subnet);
 
 		const pending = (async () => {
@@ -855,6 +858,7 @@
 				if (cc) {
 					const state = cc === 'US' && e.r != null && Array.isArray(map._r) ? String(map._r[e.r] || '').replace(/-\d+$/, '') : '';
 					out = {
+						src: 'RoRegion map',
 						code: state ? 'US-' + state : cc,
 						city: Array.isArray(map._ci) ? map._ci[e.ci] || null : null,
 						la: typeof e.la === 'number' ? e.la : null,
@@ -867,6 +871,7 @@
 				if (res && res.success && res.data && res.data.country) {
 					const cc = res.data.country === 'SP' ? 'SG' : res.data.country;
 					out = {
+						src: 'IP lookup',
 						code: cc === 'US' && res.data.region ? 'US-' + res.data.region : cc,
 						city: null,
 						la: typeof res.data.latitude === 'number' ? res.data.latitude : null,
@@ -962,11 +967,61 @@
 			return { result: 'fail' };
 		}
 		const loc = await locateIp(address);
-		return loc ? { result: 'ok', loc } : { result: 'fail' };
+		const block = String(address).split('.').slice(0, 3).join('.') + '.x';
+		noteDiagnosis(block, loc, loc && loc.src, js);
+		return loc ? { result: 'ok', loc: Object.assign({ block }, loc) } : { result: 'fail' };
+	}
+
+	// ----- Diagnosis (/diagnose) --------------------------------------------------
+	// What this page's scans saw: for each block of server addresses (x.x.x.0/24), how many
+	// servers and where they were placed, and how; plus the names of the fields in Roblox's
+	// join answer (names only: it also holds this player's tickets) and any datacenter ids.
+	const DIAG = { blocks: new Map(), fields: new Set(), remembered: 0 };
+
+	function noteDiagnosis(block, loc, src, js) {
+		let d = DIAG.blocks.get(block);
+		if (!d) DIAG.blocks.set(block, d = { n: 0, where: loc ? (loc.city || regionFullName(loc.code)) + ' (' + loc.code + ')' : 'unplaced', src: src || '', dc: new Map() });
+		d.n++;
+		for (const key of Object.keys(js || {})) DIAG.fields.add(key);
+		const dc = js && (js.DataCenterId != null ? js.DataCenterId : js.DatacenterId);
+		if (dc != null && (typeof dc === 'number' || typeof dc === 'string')) d.dc.set(String(dc), (d.dc.get(String(dc)) || 0) + 1);
+	}
+
+	function diagnosisText() {
+		const blocks = [...DIAG.blocks.entries()].sort((a, b) => b[1].n - a[1].n);
+		const seen = blocks.reduce((n, [, d]) => n + d.n, 0);
+		const lines = [
+			`BloxRegion v${VERSION} diagnose, place ${placeId}`,
+			`${fmt(seen)} servers with a known address (${fmt(DIAG.remembered)} remembered from earlier scans), ${fmt(S.unresolved)} unplaced${SCAN.active ? ' (still scanning)' : ''}`,
+			`join fields: ${[...DIAG.fields].sort().join(', ') || '(none seen)'}`
+		];
+		for (const [block, d] of blocks) {
+			const dc = d.dc.size ? ' dc ' + [...d.dc.entries()].map(([id, n]) => id + '×' + n).join(' ') : '';
+			lines.push(`${block}  ${d.n}  ${d.where}  [${d.src}]${dc}`);
+		}
+		return lines.join('\n');
+	}
+
+	function showDiagnosis(raw) {
+		const text = diagnosisText();
+		const top = [...DIAG.blocks.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 40);
+		const lines = [];
+		if (!top.length) {
+			lines.push([DIAG.remembered
+				? 'These servers were placed by an older version that didn’t keep their addresses. Wait about 45 minutes, or open a game you haven’t scanned lately, then type /diagnose again.'
+				: SCAN.active ? 'Still scanning. Type /diagnose again once some servers have been found.' : 'No servers were looked up on this page yet.']);
+		} else {
+			for (const [block, d] of top) lines.push([{ k: block }, fmt(d.n) + ' × ' + d.where + (d.src ? ' · ' + d.src : '') + (d.dc.size ? ' · dc ' + [...d.dc.keys()].join(', ') : '')]);
+		}
+		showConsole(raw, lines);
+		try {
+			navigator.clipboard.writeText(text).then(() => toast('Report copied, paste it to share it', 'info'), () => toast('Couldn’t copy the report', 'warn'));
+		} catch (e) {}
 	}
 
 	function rememberJob(id, loc) {
-		S.jobCache.set(id, [loc.code, loc.la, loc.lo, loc.city, Date.now()]);
+		// The address block and how it was placed come along, for /diagnose.
+		S.jobCache.set(id, [loc.code, loc.la, loc.lo, loc.city, Date.now(), loc.block || null, loc.src || null]);
 		S.jobCacheDirty = true;
 		queueSave();
 	}
@@ -1053,6 +1108,8 @@
 				if (hit && now - hit[4] < JOB_TTL) {
 					applyResolution(server, hit[0], hit[1], hit[2], hit[3]);
 					SCAN.done++;
+					DIAG.remembered++;
+					if (hit[5]) noteDiagnosis(hit[5], { code: hit[0], city: hit[3] }, (hit[6] || '') + ', remembered');
 				} else {
 					SCAN.queue.push(server);
 				}
@@ -1119,10 +1176,13 @@
 		S.counts = Object.create(null);
 		S.unresolved = 0;
 		S.authError = null;
+		DIAG.blocks.clear();
+		DIAG.remembered = 0;
 		Object.assign(SCAN, {
 			active: true, pagesDone: false, queue: [], listed: 0, done: 0,
 			conc: SCAN_START, okStreak: 0, coolUntil: 0, startedAt: Date.now(), endedAt: 0
 		});
+		scheduleAuto();
 		notifyWork();
 		if (UI.view && UI.view.reset) UI.view.reset();
 		scheduleUpdate();
@@ -1134,6 +1194,7 @@
 		SCAN.endedAt = Date.now();
 		saveCaches();
 		scheduleUpdate();
+		scheduleAuto();
 	}
 
 	function scanProgress() {
@@ -1688,7 +1749,8 @@
 			if (UI.view && UI.view.destroy) UI.view.destroy();
 			root.remove();
 			document.body.style.overflow = prevBodyOverflow;
-			Object.assign(UI, { root: null, closing: false, view: null, input: null, sideList: null, pill: null, consoleHost: null, toastEl: null });
+			clearInterval(UI.autoTicker);
+			Object.assign(UI, { root: null, closing: false, view: null, input: null, sideList: null, pill: null, consoleHost: null, toastEl: null, dialog: null, mainEl: null, autoChip: null, autoChipText: null });
 			UI.rows.clear();
 			UI.sections.clear();
 			UI.sideReady = false;
@@ -1700,7 +1762,9 @@
 		const typing = e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable);
 		if (e.key === 'Escape') {
 			e.preventDefault();
-			if (UI.input && document.activeElement === UI.input && UI.input.value) {
+			if (UI.dialog) {
+				UI.closeDialog();
+			} else if (UI.input && document.activeElement === UI.input && UI.input.value) {
 				setSearch('');
 			} else if (UI.consoleHost && UI.consoleHost.firstChild) {
 				hideConsole();
@@ -1816,12 +1880,14 @@
 		{ cmd: 'nearest', icon: 'star', desc: 'Open the region closest to you', alias: ['near', 'closest'] },
 		{ cmd: 'join', icon: 'play', desc: 'Join the best server near you', alias: ['play', 'best'] },
 		{ cmd: 'refresh', icon: 'refresh', desc: 'Scan all servers again', alias: ['reload'] },
+		{ cmd: 'auto-reload', icon: 'clock', desc: 'Scan all servers again on a timer', alias: ['autoreload', 'auto-refresh', 'autorefresh', 'auto'] },
 		{ cmd: 'home', icon: 'house', desc: 'Back to the overview', alias: ['overview', 'clear', 'cls'] },
 		{ cmd: 'list', icon: 'layers', desc: 'Every region with its server count', alias: ['ls'] },
 		{ cmd: 'version', icon: 'bolt', desc: 'Show the installed version', alias: ['ver'] },
 		{ cmd: 'update', icon: 'download', desc: 'Install a downloaded update, or check for one', alias: ['upgrade', 'updates'] },
 		{ cmd: 'credits', icon: 'sparkle', desc: 'Who made BloxRegion' },
 		{ cmd: 'contacts', icon: 'link', desc: 'Contact links', alias: ['contact'] },
+		{ cmd: 'diagnose', icon: 'terminal', desc: 'Copy a report of where servers were placed, to share', alias: ['diag', 'debug'] },
 		{ cmd: 'exit', icon: 'close', desc: 'Close BloxRegion', alias: ['quit', 'close'] }
 	];
 
@@ -2236,7 +2302,9 @@
 		});
 
 		const refreshBtn = h('button', { type: 'button', class: 'br-iconbtn', title: 'Refresh servers', 'aria-label': 'Refresh servers' }, icon('refresh'));
-		refreshBtn.addEventListener('click', refresh);
+		refreshBtn.addEventListener('click', () => refresh());
+		const autoChipText = h('span');
+		const autoChip = h('button', { type: 'button', class: 'br-auto-chip', title: 'Auto-reload (click to change)', 'aria-label': 'Auto-reload settings', hidden: true, onclick: openAutoDialog }, icon('clock'), autoChipText);
 		const closeBtn = h('button', { type: 'button', class: 'br-iconbtn', title: 'Close (Esc)', 'aria-label': 'Close' }, icon('close'));
 		closeBtn.addEventListener('click', closeWindow);
 
@@ -2246,11 +2314,12 @@
 		const views = h('div', { class: 'br-views' });
 		const toastEl = h('div', { class: 'br-toast', role: 'status', 'aria-live': 'polite' });
 
-		Object.assign(UI, { titleWrap, titleFlag, title, subtitle, seg: { el: seg, thumb, opts: segOpts }, progress, bar, consoleHost, viewsEl: views, toastEl });
-
-		return h('main', { class: 'br-main' },
-			h('header', { class: 'br-toolbar' }, titleWrap, h('div', { class: 'br-tools' }, seg, refreshBtn, closeBtn)),
+		const main = h('main', { class: 'br-main' },
+			h('header', { class: 'br-toolbar' }, titleWrap, h('div', { class: 'br-tools' }, seg, autoChip, refreshBtn, closeBtn)),
 			progress, consoleHost, views, toastEl);
+		Object.assign(UI, { titleWrap, titleFlag, title, subtitle, seg: { el: seg, thumb, opts: segOpts }, progress, bar, consoleHost, viewsEl: views, toastEl, autoChip, autoChipText, mainEl: main });
+		updateAutoChip();
+		return main;
 	}
 
 	function setTitle(flagCode, title, subtitle) {
@@ -2312,11 +2381,165 @@
 		UI.toastTimer = setTimeout(() => t.classList.remove('is-on'), 2400);
 	}
 
-	function refresh() {
-		hideConsole();
-		toast('Refreshing servers…', 'refresh');
+	function refresh(auto) {
+		if (!auto) hideConsole();
+		toast(auto ? 'Auto-reloading servers…' : 'Refreshing servers…', 'refresh');
 		startScan();
 		loadFriends(true);
+	}
+
+	// ----- Auto-reload (/auto-reload) ---------------------------------------------
+	// Scans every server again every few minutes. With "wait until fully loaded" the timer
+	// starts once a scan has finished, so a reload never cuts one short; without it, it
+	// runs from the start of each scan. A reload due while the tab is in the background
+	// waits until you come back to it. The settings are shared by every tab.
+	const AUTO_KEY = 'brAutoReload';
+	const AUTO_MIN = 1, AUTO_MAX = 120;
+	const AUTO = { on: false, minutes: 5, afterLoad: true, due: 0, timer: 0, waiting: false };
+
+	function setAuto(settings) {
+		const v = settings && typeof settings === 'object' ? settings : {};
+		AUTO.on = !!v.on;
+		AUTO.minutes = Math.min(AUTO_MAX, Math.max(AUTO_MIN, Math.round(Number(v.minutes) || 5)));
+		AUTO.afterLoad = v.afterLoad !== false;
+		scheduleAuto();
+	}
+
+	function scheduleAuto() {
+		clearTimeout(AUTO.timer);
+		AUTO.waiting = false;
+		AUTO.due = 0;
+		if (AUTO.on && !(AUTO.afterLoad && SCAN.active)) {
+			const from = (AUTO.afterLoad ? SCAN.endedAt : SCAN.startedAt) || Date.now();
+			AUTO.due = from + AUTO.minutes * 60000;
+			AUTO.timer = setTimeout(autoDue, Math.max(0, AUTO.due - Date.now()));
+		}
+		updateAutoChip();
+	}
+
+	function autoDue() {
+		if (!AUTO.on) return;
+		if (document.visibilityState === 'hidden') {
+			AUTO.waiting = true;
+			return;
+		}
+		// Not while Roblox is launching a game from this page.
+		if (SCAN.pausedUntil > Date.now()) {
+			AUTO.timer = setTimeout(autoDue, SCAN.pausedUntil - Date.now() + 1000);
+			return;
+		}
+		refresh(true);
+	}
+
+	document.addEventListener('visibilitychange', () => {
+		if (AUTO.waiting && document.visibilityState === 'visible') autoDue();
+	});
+
+	function saveAuto(patch) {
+		const next = { on: AUTO.on, minutes: AUTO.minutes, afterLoad: AUTO.afterLoad, ...patch };
+		store.set({ [AUTO_KEY]: next });
+		setAuto(next);
+	}
+
+	// The countdown next to the refresh button.
+	function updateAutoChip() {
+		const chip = UI.autoChip;
+		if (!chip) return;
+		chip.hidden = !AUTO.on;
+		clearInterval(UI.autoTicker);
+		if (!AUTO.on) return;
+		const paint = () => {
+			let text;
+			if (!AUTO.due) text = 'After scan';
+			else if (AUTO.waiting) text = 'On return';
+			else {
+				const left = Math.max(0, Math.ceil((AUTO.due - Date.now()) / 1000));
+				text = Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0');
+			}
+			if (UI.autoChipText.textContent !== text) UI.autoChipText.textContent = text;
+		};
+		paint();
+		if (AUTO.due) UI.autoTicker = setInterval(paint, 1000);
+	}
+
+	function openAutoDialog() {
+		if (!UI.mainEl || UI.dialog) return;
+		let minutes = AUTO.minutes, afterLoad = AUTO.afterLoad;
+		const input = h('input', { type: 'number', class: 'br-stepper-input', min: AUTO_MIN, max: AUTO_MAX, step: 1, value: minutes, 'aria-label': 'Minutes between reloads', inputmode: 'numeric' });
+		const clamp = v => Math.min(AUTO_MAX, Math.max(AUTO_MIN, Math.round(Number(v) || AUTO_MIN)));
+		const step = d => {
+			minutes = clamp(minutes + d);
+			input.value = minutes;
+		};
+		input.addEventListener('input', () => { if (input.value !== '') minutes = clamp(input.value); });
+		input.addEventListener('change', () => { input.value = minutes = clamp(input.value); });
+		const minus = h('button', { type: 'button', class: 'br-iconbtn is-small', 'aria-label': 'One minute less', onclick: () => step(-1) }, icon('minus'));
+		const plus = h('button', { type: 'button', class: 'br-iconbtn is-small', 'aria-label': 'One minute more', onclick: () => step(1) }, icon('plus'));
+
+		const toggle = h('button', { type: 'button', class: 'br-switch', role: 'switch', 'aria-labelledby': 'br-auto-wait' }, h('span', { class: 'br-switch-knob' }));
+		const waitHint = h('div', { class: 'br-setting-hint' });
+		const showWait = () => {
+			toggle.setAttribute('aria-checked', String(afterLoad));
+			waitHint.textContent = afterLoad
+				? 'The timer starts once every server has loaded, so a reload never cuts a scan short.'
+				: 'The timer runs from the start of each scan, and reloads even if the scan isn’t finished.';
+		};
+		toggle.addEventListener('click', () => {
+			afterLoad = !afterLoad;
+			showWait();
+		});
+		showWait();
+
+		const close = () => {
+			if (UI.dialog !== scrim) return;
+			UI.dialog = null;
+			scrim.classList.add('is-leaving');
+			setTimeout(() => scrim.remove(), 200);
+			if (UI.input) UI.input.focus();
+		};
+		const save = () => {
+			minutes = clamp(input.value === '' ? minutes : input.value);
+			saveAuto({ on: true, minutes, afterLoad });
+			toast(`Auto-reload every ${minutes} min${afterLoad ? ', after each full scan' : ''}`, 'clock');
+			close();
+		};
+		const actions = h('div', { class: 'br-dialog-actions' });
+		if (AUTO.on) {
+			actions.append(h('button', { type: 'button', class: 'br-btn is-quiet', text: 'Turn off', onclick: () => {
+				saveAuto({ on: false });
+				toast('Auto-reload is off', 'clock');
+				close();
+			} }));
+		}
+		actions.append(h('span', { class: 'br-dialog-gap' }),
+			h('button', { type: 'button', class: 'br-btn', text: 'Cancel', onclick: close }),
+			h('button', { type: 'button', class: 'br-btn is-primary', text: AUTO.on ? 'Save' : 'Turn on', onclick: save }));
+
+		const dialog = h('div', { class: 'br-dialog', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'br-auto-title' },
+			h('div', { class: 'br-dialog-head' },
+				h('span', { class: 'br-dialog-icon' }, icon('clock')),
+				h('div', null,
+					h('h3', { id: 'br-auto-title', class: 'br-dialog-title', text: 'Auto-reload' }),
+					h('div', { class: 'br-setting-hint', text: 'Scan every server again on a timer, so the list doesn’t go stale while you’re away.' }))),
+			h('div', { class: 'br-setting' },
+				h('div', { class: 'br-setting-label', text: 'Reload every' }),
+				h('div', { class: 'br-stepper' }, minus, input, plus, h('span', { class: 'br-stepper-unit', text: 'minutes' }))),
+			h('div', { class: 'br-setting is-row' },
+				h('div', null, h('div', { id: 'br-auto-wait', class: 'br-setting-label', text: 'Wait until fully loaded' }), waitHint),
+				toggle),
+			actions);
+		const scrim = h('div', { class: 'br-dialog-scrim' }, dialog);
+		scrim.addEventListener('click', e => { if (e.target === scrim) close(); });
+		dialog.addEventListener('keydown', e => {
+			if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') {
+				e.preventDefault();
+				save();
+			}
+		});
+		UI.dialog = scrim;
+		UI.closeDialog = close;
+		UI.mainEl.append(scrim);
+		requestAnimationFrame(() => { input.focus(); input.select(); });
 	}
 
 	// ----- Views -----------------------------------------------------------------
@@ -3103,6 +3326,13 @@
 			case 'refresh':
 				refresh();
 				break;
+			case 'auto-reload':
+				hideConsole();
+				openAutoDialog();
+				break;
+			case 'diagnose':
+				showDiagnosis(raw);
+				break;
 			case 'home':
 				hideConsole();
 				selectOverview();
@@ -3235,6 +3465,12 @@
 		userReady = loadUser();
 		await loadCaches();
 		ensureUserLoc();
+		setAuto((await store.get([AUTO_KEY]))[AUTO_KEY]);
+		try {
+			chrome.storage.onChanged.addListener((changes, area) => {
+				if (area === 'local' && changes[AUTO_KEY]) setAuto(changes[AUTO_KEY].newValue);
+			});
+		} catch (e) {}
 		startScan();
 		userReady.then(user => { if (user) loadFriends(); });
 		loadUpdateInfo(false);
