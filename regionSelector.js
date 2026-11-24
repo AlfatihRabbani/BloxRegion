@@ -936,6 +936,23 @@
 		return res;
 	}
 
+	// Where the server is, from the join answer: its relay address (UdmuxEndpoints) or, for
+	// servers Roblox reaches directly, as in AWS regions such as Jakarta, which have no
+	// relay address, the server's own (MachineAddress). Failing both, any field holding a
+	// plain IPv4 address. Only addresses are read; the rest of the answer holds tickets.
+	const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+	const usable = v => {
+		const m = typeof v === 'string' && IPV4.exec(v);
+		return !!m && m.slice(1).every(o => +o <= 255) && +m[1] !== 0 && +m[1] !== 10 && +m[1] !== 127 && !(+m[1] === 192 && +m[2] === 168) && !(+m[1] === 172 && +m[2] >= 16 && +m[2] <= 31);
+	};
+	function serverAddress(js) {
+		if (!js || typeof js !== 'object') return null;
+		for (const e of Array.isArray(js.UdmuxEndpoints) ? js.UdmuxEndpoints : []) if (e && usable(e.Address)) return e.Address;
+		if (usable(js.MachineAddress)) return js.MachineAddress;
+		for (const v of Object.values(js)) if (usable(v)) return v;
+		return null;
+	}
+
 	// Asks gamejoin which datacenter a server (of any place) runs in.
 	let warnedNoEndpoint = false;
 	async function joinLookup(targetPlaceId, gameId) {
@@ -958,11 +975,12 @@
 				setUserLoc(session.Latitude, session.Longitude, 'roblox');
 			} catch (e) {}
 		}
-		const address = js && js.UdmuxEndpoints && js.UdmuxEndpoints[0] && js.UdmuxEndpoints[0].Address;
+		const address = serverAddress(js);
 		if (!address) {
+			noteDiagnosis('no address in the join answer', null, 'none', js);
 			if (!warnedNoEndpoint) {
 				warnedNoEndpoint = true;
-				console.warn('[BloxRegion] join response had no UdmuxEndpoints (status ' + (data && data.status) + ')');
+				console.warn('[BloxRegion] join response had no server address (status ' + (data && data.status) + ')');
 			}
 			return { result: 'fail' };
 		}
