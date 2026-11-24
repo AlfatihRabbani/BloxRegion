@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.4.8
+
+- **Fixed: Jakarta and other new locations showing no servers** — servers in
+  places like Jakarta and Tel Aviv have no relay address in Roblox's join answer,
+  so BloxRegion couldn't tell where they were and left them out. It now reads the
+  server's own address instead, which it already knew how to place. Servers whose
+  answer holds no address at all are listed by `/diagnose`.
+
 ## 2.4.7
 
 - **Auto-reload** — type `/auto-reload` to have BloxRegion scan every server
